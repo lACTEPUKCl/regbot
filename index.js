@@ -15,6 +15,7 @@ import {
 } from "discord.js";
 import getCommands from "./commands/getCommands.js";
 import { MongoClient } from "mongodb";
+import schedule from "node-schedule";
 import { config } from "dotenv";
 config();
 
@@ -42,8 +43,10 @@ const timers = new Map(); // Локальный кэш таймеров для �
 const restoreTimers = async () => {
   try {
     const mongoClient = new MongoClient(process.env.MONGO_URI);
+    await mongoClient.connect();
     const db = mongoClient.db("SquadJS");
     const notifications = db.collection("notifications");
+    const events = db.collection("events");
 
     const activeNotifications = await notifications
       .find({
@@ -53,50 +56,42 @@ const restoreTimers = async () => {
       .toArray();
 
     for (const notification of activeNotifications) {
-      const remainingTime =
-        new Date(notification.endTime).getTime() - Date.now();
+      const { userId, teamName, eventId, endTime } = notification;
+      const remainingTime = new Date(endTime).getTime() - Date.now();
 
       if (remainingTime > 0) {
-        const timerId = setTimeout(async () => {
-          // Удаление пользователя из команды после истечения времени
-          const events = db.collection("events");
-          const event = await events.findOne({ eventId: notification.eventId });
+        schedule.scheduleJob(endTime, async () => {
+          try {
+            const event = await events.findOne({ eventId });
+            if (!event) return;
 
-          if (event) {
-            const team = event.teams.find(
-              (t) => t.name === notification.teamName
+            const team = event.teams.find((t) => t.name === teamName);
+            if (!team) return;
+
+            team.members = team.members.filter((m) => m.userId !== userId);
+
+            // Удаляем уведомление
+            await notifications.deleteOne({ _id: notification._id });
+
+            console.log(
+              `Игрок ${userId} удален из команды ${teamName} после истечения времени.`
             );
 
-            if (team) {
-              team.members = team.members.filter(
-                (m) => m.userId !== notification.userId
-              );
-
-              await events.updateOne(
-                { eventId: event.eventId },
-                { $set: { teams: event.teams } }
-              );
-
-              console.log(
-                `Игрок ${notification.userId} был удалён из команды ${notification.teamName} после истечения времени.`
-              );
-            }
+            await notifications.updateOne(
+              { _id: notification._id },
+              { $set: { status: "expired" } }
+            );
+          } catch (error) {
+            console.error(`Ошибка при удалении игрока ${userId}:`, error);
           }
-
-          // Обновляем статус уведомления
-          await notifications.updateOne(
-            { _id: notification._id },
-            { $set: { status: "expired" } }
-          );
-        }, remainingTime);
-
-        timers.set(notification.userId, timerId);
+        });
       }
     }
 
     console.log(
       `Восстановлено ${activeNotifications.length} активных таймеров.`
     );
+    await mongoClient.close();
   } catch (error) {
     console.error("Ошибка при восстановлении таймеров:", error);
   }

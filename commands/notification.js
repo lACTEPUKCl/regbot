@@ -1,19 +1,28 @@
+import schedule from "node-schedule";
 import {
   SlashCommandBuilder,
   EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  PermissionFlagsBits,
 } from "discord.js";
 import { MongoClient } from "mongodb";
 
 const notification = new SlashCommandBuilder()
   .setName("notification")
-  .setDescription("Уведомить игроков из указанных команд")
+  .setDescription("Запланировать уведомление для игроков")
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
   .addStringOption((option) =>
     option
       .setName("teams")
       .setDescription("Названия команд через запятую")
+      .setRequired(true)
+  )
+  .addStringOption((option) =>
+    option
+      .setName("send_time")
+      .setDescription("Дата и время отправки (в формате ГГГГ-ММ-ДД ЧЧ:ММ)")
       .setRequired(true)
   )
   .addIntegerOption((option) =>
@@ -25,10 +34,10 @@ const notification = new SlashCommandBuilder()
 
 const execute = async (interaction) => {
   const teamsInput = interaction.options.getString("teams");
+  const sendTimeInput = interaction.options.getString("send_time"); // ГГГГ-ММ-ДД ЧЧ:ММ
   const responseTime = interaction.options.getInteger("response_time");
 
   const mongoClient = new MongoClient(process.env.MONGO_URI);
-  const timers = new Map(); // Карта для хранения активных таймеров
 
   try {
     await mongoClient.connect();
@@ -38,11 +47,21 @@ const execute = async (interaction) => {
 
     const teamNames = teamsInput.split(",").map((name) => name.trim());
 
-    // Находим события с указанными командами
+    // Преобразуем строку времени в объект Date
+    const sendTime = new Date(sendTimeInput.replace(" ", "T") + ":00.000Z");
+    // Учитываем смещение для перевода из MSK (UTC+3) в UTC
+    sendTime.setHours(sendTime.getHours() - 3);
+
+    if (isNaN(sendTime.getTime())) {
+      await interaction.reply({
+        content: "Неверный формат даты. Используйте ГГГГ-ММ-ДД ЧЧ:ММ",
+        ephemeral: true,
+      });
+      return;
+    }
+
     const affectedEvents = await events
-      .find({
-        "teams.name": { $in: teamNames },
-      })
+      .find({ "teams.name": { $in: teamNames } })
       .toArray();
 
     if (affectedEvents.length === 0) {
@@ -59,128 +78,124 @@ const execute = async (interaction) => {
 
         for (const member of team.members) {
           const user = await interaction.client.users.fetch(member.userId);
-          if (!user) {
-            console.warn(`Пользователь с ID ${member.userId} не найден.`);
-            continue;
-          }
+          if (!user) continue;
 
-          // Отправляем уведомление с кнопками
-          const dmChannel = await user.createDM();
-          const embed = new EmbedBuilder()
-            .setTitle("Подтверждение участия")
-            .setDescription(
-              `Вы зарегистрированы в команде **${team.name}**. Пожалуйста, подтвердите участие, нажав "Подтвердить" или "Отменить". Если вы не ответите в течение ${responseTime} часов, ваша регистрация будет аннулирована.`
-            )
-            .setColor("#3498DB");
-
-          const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`confirmDM_${member.userId}_${team.name}`)
-              .setLabel("Подтвердить")
-              .setStyle(ButtonStyle.Success),
-            new ButtonBuilder()
-              .setCustomId(`cancelDM_${member.userId}_${team.name}`)
-              .setLabel("Отменить")
-              .setStyle(ButtonStyle.Danger)
+          // Время окончания ответа (дедлайн)
+          const endTime = new Date(
+            sendTime.getTime() + responseTime * 60 * 60 * 1000
           );
 
-          await dmChannel.send({
-            embeds: [embed],
-            components: [row],
-          });
-
-          // Сохраняем уведомление в базе данных
-          const timerEndTime = new Date(
-            Date.now() + responseTime * 60 * 60 * 1000
-          );
+          // Сохраняем уведомление в базе
           await notifications.insertOne({
             userId: member.userId,
             teamName: team.name,
             eventId: event.eventId,
-            endTime: timerEndTime,
+            sendTime,
+            endTime,
             status: "pending",
           });
 
-          // Устанавливаем таймер для удаления пользователя
-          const timerId = setTimeout(async () => {
-            // Проверяем статус перед удалением
-            const notification = await notifications.findOne({
-              userId: member.userId,
-              teamName: team.name,
-              eventId: event.eventId,
-            });
-
-            if (notification && notification.status === "pending") {
-              // Удаляем игрока из команды
-              team.members = team.members.filter(
-                (m) => m.userId !== member.userId
-              );
-
-              // Обновляем данные в базе
-              await events.updateOne(
-                { eventId: event.eventId },
-                { $set: { teams: event.teams } }
-              );
-
-              console.log(
-                `Игрок ${member.userId} был удалён из команды ${team.name} за неответ.`
-              );
-
-              // Обновляем статус уведомления
-              await notifications.deleteOne({
+          // Планируем отправку уведомления в указанное время
+          schedule.scheduleJob(sendTime, async () => {
+            try {
+              const notification = await notifications.findOne({
                 userId: member.userId,
                 teamName: team.name,
                 eventId: event.eventId,
                 status: "pending",
               });
 
-              // Обновляем Embed сообщения
-              const eventChannel = await interaction.client.channels.fetch(
-                event.channelId
-              );
-              const eventMessage = await eventChannel.messages.fetch(
-                event.eventId
-              );
+              if (!notification) return;
 
-              const maxPlayersPerTeam = event.maxPlayersPerTeam || "∞";
+              const dmChannel = await user.createDM();
+              const embed = new EmbedBuilder()
+                .setTitle("Подтверждение участия")
+                .setDescription(
+                  `Вы зарегистрированы в команде **${team.name}**. Подтвердите участие, нажав "Подтвердить" или "Отменить". У вас есть ${responseTime} часов.`
+                )
+                .setColor("#3498DB");
 
-              const updatedEmbed = EmbedBuilder.from(
-                eventMessage.embeds[0]
-              ).setFields(
-                event.teams.map((team) => ({
-                  name: `${team.name} (${team.members.length}/${maxPlayersPerTeam})`,
-                  value:
-                    team.members
-                      .map((member) => `${member.nickname} (${member.steamId})`)
-                      .join("\n") || "-",
-                  inline: true,
-                }))
+              const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                  .setCustomId(`confirmDM_${member.userId}_${team.name}`)
+                  .setLabel("Подтвердить")
+                  .setStyle(ButtonStyle.Success),
+                new ButtonBuilder()
+                  .setCustomId(`cancelDM_${member.userId}_${team.name}`)
+                  .setLabel("Отменить")
+                  .setStyle(ButtonStyle.Danger)
               );
 
-              await eventMessage.edit({ embeds: [updatedEmbed] });
+              await dmChannel.send({ embeds: [embed], components: [row] });
+
+              await notifications.updateOne(
+                { _id: notification._id },
+                { $set: { status: "sent" } }
+              );
+
+              console.log(
+                `Уведомление отправлено игроку ${member.userId} в ${team.name}`
+              );
+            } catch (error) {
+              console.error(
+                `Ошибка при отправке уведомления ${member.userId}:`,
+                error
+              );
             }
+          });
 
-            // Удаляем таймер из карты
-            timers.delete(member.userId);
-          }, responseTime * 60 * 60 * 1000);
+          // Планируем удаление игрока, если он не ответит
+          schedule.scheduleJob(endTime, async () => {
+            try {
+              const notification = await notifications.findOne({
+                userId: member.userId,
+                teamName: team.name,
+                eventId: event.eventId,
+                status: "sent",
+              });
 
-          timers.set(member.userId, timerId);
+              if (!notification) return;
+
+              // Удаляем игрока из команды
+              team.members = team.members.filter(
+                (m) => m.userId !== member.userId
+              );
+
+              await events.updateOne(
+                { eventId: event.eventId },
+                { $set: { teams: event.teams } }
+              );
+
+              console.log(
+                `Игрок ${member.userId} удален из команды ${team.name} за неответ.`
+              );
+
+              // Удаляем уведомление
+              await notifications.deleteOne({ _id: notification._id });
+            } catch (error) {
+              console.error(
+                `Ошибка при удалении игрока ${member.userId}:`,
+                error
+              );
+            }
+          });
         }
       }
     }
 
     await interaction.reply({
-      content: `Уведомления отправлены игрокам из указанных команд. Таймер установлен на ${responseTime} час(ов).`,
+      content: `Уведомления запланированы на ${sendTime.toLocaleString(
+        "ru-RU",
+        { timeZone: "Europe/Moscow" }
+      )} и истекают через ${responseTime} час(ов).`,
       ephemeral: true,
     });
   } catch (error) {
     console.error(error);
     await interaction.reply({
-      content: "Произошла ошибка при отправке уведомлений.",
+      content: "Произошла ошибка при планировании уведомлений.",
       ephemeral: true,
     });
-  } finally {
-    await mongoClient.close();
   }
 };
 

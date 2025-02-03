@@ -1,9 +1,10 @@
-import { SlashCommandBuilder } from "discord.js";
+import { SlashCommandBuilder, PermissionFlagsBits } from "discord.js";
 import { MongoClient } from "mongodb";
 
 const delevent = new SlashCommandBuilder()
   .setName("delevent")
   .setDescription("Удалить событие")
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
   .addStringOption((option) =>
     option
       .setName("eventid")

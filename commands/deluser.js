@@ -1,9 +1,14 @@
-import { SlashCommandBuilder, EmbedBuilder } from "discord.js";
+import {
+  SlashCommandBuilder,
+  EmbedBuilder,
+  PermissionFlagsBits,
+} from "discord.js";
 import { MongoClient } from "mongodb";
 
 const deluser = new SlashCommandBuilder()
   .setName("deluser")
   .setDescription("Удалить пользователя из всех команд по Steam ID")
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
   .addStringOption((option) =>
     option
       .setName("steamid")

@@ -5,12 +5,14 @@ import {
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
+  PermissionFlagsBits,
 } from "discord.js";
 import { MongoClient } from "mongodb";
 
 const startreg = new SlashCommandBuilder()
   .setName("startreg")
-  .setDescription("Запуск регистрации на турнир");
+  .setDescription("Запуск регистрации на турнир")
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
 
 const getImageFromUser = async (dmChannel) => {
   try {

@@ -1,9 +1,10 @@
-import { SlashCommandBuilder } from "discord.js";
+import { SlashCommandBuilder, PermissionFlagsBits } from "discord.js";
 import { MongoClient } from "mongodb";
 
 const stopreg = new SlashCommandBuilder()
   .setName("stopreg")
   .setDescription("Остановить регистрацию на турнир")
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
   .addStringOption((option) =>
     option
       .setName("eventid")
