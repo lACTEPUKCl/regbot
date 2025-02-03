@@ -138,7 +138,7 @@ const execute = async (interaction) => {
 
   // Отправляем сообщение в канал сервера
   const eventChannel = interaction.guild.channels.cache.find(
-    (ch) => ch.type === ChannelType.GuildText && ch.name === "asdasda"
+    (ch) => ch.type === ChannelType.GuildText && ch.name === "test"
   );
 
   if (!eventChannel) {
