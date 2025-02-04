@@ -127,11 +127,11 @@ const execute = async (interaction) => {
   // Кнопки для регистрации
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId("register")
+      .setCustomId(`register_${message.id}`) // добавляем eventId в customId
       .setLabel("Регистрация")
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
-      .setCustomId("cancel")
+      .setCustomId(`cancel_${message.id}`) // аналогично для отмены
       .setLabel("Отмена")
       .setStyle(ButtonStyle.Danger)
   );

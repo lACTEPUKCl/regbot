@@ -7,38 +7,57 @@ import { getCollection } from "../utils/mongodb.js";
 
 const deluser = new SlashCommandBuilder()
   .setName("deluser")
-  .setDescription("Удалить пользователя из всех команд по Steam ID")
+  .setDescription("Удалить пользователя из команд по Steam ID")
   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
   .addStringOption((option) =>
     option
       .setName("steamid")
       .setDescription("Steam ID пользователя")
       .setRequired(true)
+  )
+  // Добавляем опциональный параметр eventid
+  .addStringOption((option) =>
+    option
+      .setName("eventid")
+      .setDescription("ID события, из которого удалить пользователя.")
+      .setRequired(false)
   );
 
 const execute = async (interaction) => {
   const steamId = interaction.options.getString("steamid");
+  const eventIdOption = interaction.options.getString("eventid");
 
   try {
     const events = await getCollection("events");
 
-    // Находим все события с командами, содержащими данного пользователя
-    const affectedEvents = await events
-      .find({
-        "teams.members.steamId": steamId,
-      })
-      .toArray();
+    let affectedEvents;
+    if (eventIdOption) {
+      // Если указан eventId, ищем только по нему
+      affectedEvents = await events
+        .find({
+          eventId: eventIdOption,
+          "teams.members.steamId": steamId,
+        })
+        .toArray();
+    } else {
+      // Ищем во всех событиях, где есть участник с данным Steam ID
+      affectedEvents = await events
+        .find({ "teams.members.steamId": steamId })
+        .toArray();
+    }
 
     if (affectedEvents.length === 0) {
       await interaction.reply({
-        content: `Пользователь с Steam ID ${steamId} не найден в списках команд.`,
+        content: `Пользователь с Steam ID ${steamId} не найден ${
+          eventIdOption ? `в событии с ID ${eventIdOption}` : "во всех событиях"
+        }.`,
         ephemeral: true,
       });
       return;
     }
 
     for (const event of affectedEvents) {
-      // Удаляем пользователя из всех команд
+      // Удаляем пользователя из всех команд данного события
       event.teams.forEach((team) => {
         team.members = team.members.filter(
           (member) => member.steamId !== steamId
@@ -51,7 +70,7 @@ const execute = async (interaction) => {
         { $set: { teams: event.teams } }
       );
 
-      // Обновляем эмбед
+      // Обновляем эмбед сообщения события
       const eventChannel = interaction.guild.channels.cache.get(
         event.channelId
       );
@@ -70,7 +89,7 @@ const execute = async (interaction) => {
 
       const maxPlayersPerTeam = event.maxPlayersPerTeam || "∞";
 
-      // Обновляем поля эмбеда
+      // Формируем обновленные поля эмбеда для каждой команды
       const updatedFields = event.teams.map((team) => ({
         name: `${team.name} (${team.members.length}/${maxPlayersPerTeam})`,
         value:
@@ -93,7 +112,9 @@ const execute = async (interaction) => {
     }
 
     await interaction.reply({
-      content: `Пользователь с Steam ID ${steamId} успешно удалён из всех команд.`,
+      content: `Пользователь с Steam ID ${steamId} успешно удалён ${
+        eventIdOption ? `из события с ID ${eventIdOption}` : "из всех событий"
+      }.`,
       ephemeral: true,
     });
   } catch (error) {

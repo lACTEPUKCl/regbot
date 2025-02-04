@@ -18,9 +18,8 @@ const execute = async (interaction) => {
   try {
     const events = await getCollection("events");
 
-    // Проверяем, существует ли событие
+    // Ищем событие по указанному eventId
     const event = await events.findOne({ eventId });
-
     if (!event) {
       await interaction.reply({
         content: `Событие с ID ${eventId} не найдено.`,
@@ -29,19 +28,19 @@ const execute = async (interaction) => {
       return;
     }
 
-    // Проверяем, активное ли событие
+    // Проверяем, не остановлена ли регистрация уже ранее
     if (event.status === "stopped") {
       await interaction.reply({
-        content: `Регистрация на это событие уже остановлена.`,
+        content: `Регистрация для события с ID ${eventId} уже остановлена.`,
         ephemeral: true,
       });
       return;
     }
 
-    // Обновляем статус события
+    // Обновляем статус события на "stopped"
     await events.updateOne({ eventId }, { $set: { status: "stopped" } });
 
-    // Убираем кнопки из сообщения
+    // Получаем канал, в котором опубликовано сообщение события
     const channel = interaction.guild.channels.cache.get(event.channelId);
     if (!channel) {
       await interaction.reply({
@@ -51,17 +50,21 @@ const execute = async (interaction) => {
       return;
     }
 
+    // Получаем сообщение события по eventId и убираем кнопки (компоненты)
     const message = await channel.messages.fetch(eventId);
     if (message) {
       await message.edit({ components: [] });
+      console.log(`Кнопки для события ${eventId} успешно удалены.`);
+    } else {
+      console.warn(`Сообщение события с ID ${eventId} не найдено.`);
     }
 
     await interaction.reply({
-      content: `Регистрация на событие с ID ${eventId} успешно остановлена.`,
+      content: `Регистрация для события с ID ${eventId} успешно остановлена.`,
       ephemeral: true,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Ошибка при остановке регистрации:", error);
     await interaction.reply({
       content: "Произошла ошибка при остановке регистрации.",
       ephemeral: true,

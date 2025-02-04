@@ -15,6 +15,12 @@ const notification = new SlashCommandBuilder()
   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
   .addStringOption((option) =>
     option
+      .setName("event_id")
+      .setDescription("ID события, для которого отправляются уведомления")
+      .setRequired(true)
+  )
+  .addStringOption((option) =>
+    option
       .setName("teams")
       .setDescription("Названия команд через запятую")
       .setRequired(true)
@@ -54,8 +60,10 @@ const execute = async (interaction) => {
       return;
     }
 
+    const eventId = interaction.options.getString("event_id");
+
     const affectedEvents = await events
-      .find({ "teams.name": { $in: teamNames } })
+      .find({ eventId, "teams.name": { $in: teamNames } })
       .toArray();
 
     if (affectedEvents.length === 0) {
