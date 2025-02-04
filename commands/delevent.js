@@ -1,5 +1,5 @@
 import { SlashCommandBuilder, PermissionFlagsBits } from "discord.js";
-import { MongoClient } from "mongodb";
+import { getCollection } from "../utils/mongodb.js";
 
 const delevent = new SlashCommandBuilder()
   .setName("delevent")
@@ -14,12 +14,9 @@ const delevent = new SlashCommandBuilder()
 
 const execute = async (interaction) => {
   const eventId = interaction.options.getString("eventid");
-  const mongoClient = new MongoClient(process.env.MONGO_URI);
 
   try {
-    await mongoClient.connect();
-    const db = mongoClient.db("SquadJS");
-    const events = db.collection("events");
+    const events = await getCollection("events");
 
     // Проверяем, существует ли событие
     const event = await events.findOne({ eventId });
@@ -61,8 +58,6 @@ const execute = async (interaction) => {
       content: "Произошла ошибка при удалении события.",
       ephemeral: true,
     });
-  } finally {
-    await mongoClient.close();
   }
 };
 

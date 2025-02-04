@@ -7,7 +7,7 @@ import {
   ChannelType,
   PermissionFlagsBits,
 } from "discord.js";
-import { MongoClient } from "mongodb";
+import { getCollection } from "../utils/mongodb.js";
 
 const startreg = new SlashCommandBuilder()
   .setName("startreg")
@@ -151,13 +151,8 @@ const execute = async (interaction) => {
     components: [row],
   });
 
-  // Сохраняем данные в MongoDB
-  const mongoClient = new MongoClient(process.env.MONGO_URI);
-
   try {
-    await mongoClient.connect();
-    const db = mongoClient.db("SquadJS");
-    const events = db.collection("events");
+    const events = await getCollection("events");
 
     await events.insertOne({
       eventId: message.id,
@@ -176,8 +171,6 @@ const execute = async (interaction) => {
   } catch (error) {
     console.error(error);
     await dmChannel.send("Произошла ошибка при сохранении события.");
-  } finally {
-    await mongoClient.close();
   }
 };
 

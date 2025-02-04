@@ -3,7 +3,7 @@ import {
   EmbedBuilder,
   PermissionFlagsBits,
 } from "discord.js";
-import { MongoClient } from "mongodb";
+import { getCollection } from "../utils/mongodb.js";
 
 const deluser = new SlashCommandBuilder()
   .setName("deluser")
@@ -18,12 +18,9 @@ const deluser = new SlashCommandBuilder()
 
 const execute = async (interaction) => {
   const steamId = interaction.options.getString("steamid");
-  const mongoClient = new MongoClient(process.env.MONGO_URI);
 
   try {
-    await mongoClient.connect();
-    const db = mongoClient.db("SquadJS");
-    const events = db.collection("events");
+    const events = await getCollection("events");
 
     // Находим все события с командами, содержащими данного пользователя
     const affectedEvents = await events
@@ -105,8 +102,6 @@ const execute = async (interaction) => {
       content: "Произошла ошибка при удалении пользователя.",
       ephemeral: true,
     });
-  } finally {
-    await mongoClient.close();
   }
 };
 

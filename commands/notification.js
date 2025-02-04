@@ -7,7 +7,7 @@ import {
   ButtonStyle,
   PermissionFlagsBits,
 } from "discord.js";
-import { MongoClient } from "mongodb";
+import { getCollection } from "../utils/mongodb.js";
 
 const notification = new SlashCommandBuilder()
   .setName("notification")
@@ -34,22 +34,16 @@ const notification = new SlashCommandBuilder()
 
 const execute = async (interaction) => {
   const teamsInput = interaction.options.getString("teams");
-  const sendTimeInput = interaction.options.getString("send_time"); // ГГГГ-ММ-ДД ЧЧ:ММ
+  const sendTimeInput = interaction.options.getString("send_time");
   const responseTime = interaction.options.getInteger("response_time");
 
-  const mongoClient = new MongoClient(process.env.MONGO_URI);
-
   try {
-    await mongoClient.connect();
-    const db = mongoClient.db("SquadJS");
-    const events = db.collection("events");
-    const notifications = db.collection("notifications");
+    const events = await getCollection("events");
+    const notifications = await getCollection("notifications");
 
     const teamNames = teamsInput.split(",").map((name) => name.trim());
 
-    // Преобразуем строку времени в объект Date
     const sendTime = new Date(sendTimeInput.replace(" ", "T") + ":00.000Z");
-    // Учитываем смещение для перевода из MSK (UTC+3) в UTC
     sendTime.setHours(sendTime.getHours() - 3);
 
     if (isNaN(sendTime.getTime())) {
@@ -80,13 +74,11 @@ const execute = async (interaction) => {
           const user = await interaction.client.users.fetch(member.userId);
           if (!user) continue;
 
-          // Время окончания ответа (дедлайн)
           const endTime = new Date(
             sendTime.getTime() + responseTime * 60 * 60 * 1000
           );
 
-          // Сохраняем уведомление в базе
-          await notifications.insertOne({
+          const notificationRecord = await notifications.insertOne({
             userId: member.userId,
             teamName: team.name,
             eventId: event.eventId,
@@ -95,23 +87,13 @@ const execute = async (interaction) => {
             status: "pending",
           });
 
-          // Планируем отправку уведомления в указанное время
           schedule.scheduleJob(sendTime, async () => {
             try {
-              const notification = await notifications.findOne({
-                userId: member.userId,
-                teamName: team.name,
-                eventId: event.eventId,
-                status: "pending",
-              });
-
-              if (!notification) return;
-
               const dmChannel = await user.createDM();
               const embed = new EmbedBuilder()
                 .setTitle("Подтверждение участия")
                 .setDescription(
-                  `Вы зарегистрированы в команде **${team.name}**. Подтвердите участие, нажав "Подтвердить" или "Отменить". У вас есть ${responseTime} часов.`
+                  `Вы зарегистрированы в команде **${team.name}**. Подтвердите участие, нажав \"Подтвердить\" или \"Отменить\". У вас есть ${responseTime} ч.`
                 )
                 .setColor("#3498DB");
 
@@ -126,11 +108,14 @@ const execute = async (interaction) => {
                   .setStyle(ButtonStyle.Danger)
               );
 
-              await dmChannel.send({ embeds: [embed], components: [row] });
+              const message = await dmChannel.send({
+                embeds: [embed],
+                components: [row],
+              });
 
               await notifications.updateOne(
-                { _id: notification._id },
-                { $set: { status: "sent" } }
+                { _id: notificationRecord.insertedId },
+                { $set: { messageId: message.id, channelId: dmChannel.id } }
               );
 
               console.log(
@@ -144,34 +129,47 @@ const execute = async (interaction) => {
             }
           });
 
-          // Планируем удаление игрока, если он не ответит
           schedule.scheduleJob(endTime, async () => {
             try {
               const notification = await notifications.findOne({
                 userId: member.userId,
                 teamName: team.name,
                 eventId: event.eventId,
-                status: "sent",
+                status: "pending",
               });
 
               if (!notification) return;
 
-              // Удаляем игрока из команды
               team.members = team.members.filter(
                 (m) => m.userId !== member.userId
               );
-
               await events.updateOne(
                 { eventId: event.eventId },
                 { $set: { teams: event.teams } }
               );
 
+              if (notification.channelId && notification.messageId) {
+                const dmChannel = await interaction.client.channels.fetch(
+                  notification.channelId
+                );
+                if (dmChannel) {
+                  const message = await dmChannel.messages
+                    .fetch(notification.messageId)
+                    .catch(() => null);
+                  if (message) await message.delete();
+                }
+              }
+
+              await user
+                .send(
+                  `Вы были исключены из команды ${team.name} из-за отсутствия подтверждения готовности к участию в игре.`
+                )
+                .catch(() => null);
+
+              await notifications.deleteOne({ _id: notification._id });
               console.log(
                 `Игрок ${member.userId} удален из команды ${team.name} за неответ.`
               );
-
-              // Удаляем уведомление
-              await notifications.deleteOne({ _id: notification._id });
             } catch (error) {
               console.error(
                 `Ошибка при удалении игрока ${member.userId}:`,

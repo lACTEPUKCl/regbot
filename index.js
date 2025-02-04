@@ -9,14 +9,13 @@ import {
   ActionRowBuilder,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  EmbedBuilder,
 } from "discord.js";
 import getCommands from "./commands/getCommands.js";
-import { MongoClient } from "mongodb";
-import schedule from "node-schedule";
+import { getCollection } from "./utils/mongodb.js";
 import { config } from "dotenv";
+import { restoreTimers } from "./utils/restoreTimers.js";
+import { updateEventEmbed } from "./utils/updateEventEmbed.js";
+import getSteamId64 from "./utils/getSteamID64.js";
 config();
 
 const client = new Client({
@@ -30,72 +29,97 @@ const client = new Client({
 client.commands = new Collection();
 const commands = await getCommands();
 let currentEvent = null;
-
 for (const command of commands) {
   if ("data" in command && "execute" in command)
     client.commands.set(command.data.name, command);
   else console.log("The command is missing 'data' or 'execute' property.");
 }
 
-const timers = new Map(); // Локальный кэш таймеров для работы в оперативной памяти
-
 // Функция для восстановления активных таймеров из базы
-const restoreTimers = async () => {
-  try {
-    const mongoClient = new MongoClient(process.env.MONGO_URI);
-    await mongoClient.connect();
-    const db = mongoClient.db("SquadJS");
-    const notifications = db.collection("notifications");
-    const events = db.collection("events");
+// const restoreTimers = async () => {
+//   try {
+//     const notifications = await getCollection("notifications");
+//     const events = await getCollection("events");
 
-    const activeNotifications = await notifications
-      .find({
-        status: "pending",
-        endTime: { $gt: new Date() },
-      })
-      .toArray();
+//     const activeNotifications = await notifications
+//       .find({
+//         status: "pending",
+//         endTime: { $gt: new Date() },
+//       })
+//       .toArray();
 
-    for (const notification of activeNotifications) {
-      const { userId, teamName, eventId, endTime } = notification;
-      const remainingTime = new Date(endTime).getTime() - Date.now();
+//     for (const notification of activeNotifications) {
+//       const { userId, teamName, eventId, endTime, messageId, channelId } =
+//         notification;
+//       const remainingTime = new Date(endTime).getTime() - Date.now();
 
-      if (remainingTime > 0) {
-        schedule.scheduleJob(endTime, async () => {
-          try {
-            const event = await events.findOne({ eventId });
-            if (!event) return;
+//       if (remainingTime > 0) {
+//         schedule.scheduleJob(endTime, async () => {
+//           try {
+//             const event = await events.findOne({ eventId });
+//             if (!event) return;
 
-            const team = event.teams.find((t) => t.name === teamName);
-            if (!team) return;
+//             const team = event.teams.find((t) => t.name === teamName);
+//             if (!team) return;
 
-            team.members = team.members.filter((m) => m.userId !== userId);
+//             team.members = team.members.filter((m) => m.userId !== userId);
 
-            // Удаляем уведомление
-            await notifications.deleteOne({ _id: notification._id });
+//             // Удаляем уведомление из базы данных
+//             await notifications.deleteOne({ _id: notification._id });
 
-            console.log(
-              `Игрок ${userId} удален из команды ${teamName} после истечения времени.`
-            );
+//             console.log(
+//               `Игрок ${userId} удален из команды ${teamName} после истечения времени.`
+//             );
 
-            await notifications.updateOne(
-              { _id: notification._id },
-              { $set: { status: "expired" } }
-            );
-          } catch (error) {
-            console.error(`Ошибка при удалении игрока ${userId}:`, error);
-          }
-        });
-      }
-    }
+//             // Отправка уведомления пользователю в DM
+//             try {
+//               const user = await client.users.fetch(userId);
+//               if (user) {
+//                 await user.send(
+//                   `Вы были исключены из команды ${teamName} из-за отсутствия подтверждения готовности к участию в игре.`
+//                 );
+//               }
+//             } catch (dmError) {
+//               console.error(
+//                 `Не удалось отправить уведомление пользователю ${userId}:`,
+//                 dmError
+//               );
+//             }
 
-    console.log(
-      `Восстановлено ${activeNotifications.length} активных таймеров.`
-    );
-    await mongoClient.close();
-  } catch (error) {
-    console.error("Ошибка при восстановлении таймеров:", error);
-  }
-};
+//             // Удаление сообщения с уведомлением из DM
+//             if (messageId && channelId) {
+//               try {
+//                 const dmChannel = await client.channels.fetch(channelId);
+//                 if (dmChannel) {
+//                   const message = await dmChannel.messages.fetch(messageId);
+//                   if (message) {
+//                     await message.delete();
+//                     console.log(
+//                       `Сообщение с ID ${messageId} удалено из DM-канала ${channelId}.`
+//                     );
+//                   }
+//                 }
+//               } catch (msgError) {
+//                 console.error(
+//                   `Ошибка при удалении DM сообщения ${messageId} из канала ${channelId}:`,
+//                   msgError
+//                 );
+//               }
+//             }
+//           } catch (error) {
+//             console.error(`Ошибка при удалении игрока ${userId}:`, error);
+//           }
+//         });
+//       }
+//     }
+
+//     console.log(
+//       `Восстановлено ${activeNotifications.length} активных таймеров.`
+//     );
+//   } catch (error) {
+//     console.error("Ошибка при восстановлении таймеров:", error);
+//   }
+// };
 
 client.on("ready", async () => {
   console.log(`Logged in as ${client.user.tag}!`);
@@ -126,13 +150,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isButton() && interaction.customId === "register") {
-    const mongoClient = new MongoClient(process.env.MONGO_URI);
-
     try {
-      await mongoClient.connect();
-      const db = mongoClient.db("SquadJS");
-      const events = db.collection("events");
-
+      const events = await getCollection("events");
       currentEvent = await events.findOne({ eventId: interaction.message.id });
 
       if (!currentEvent) {
@@ -147,62 +166,41 @@ client.on(Events.InteractionCreate, async (interaction) => {
         team.members.some((member) => member.userId === interaction.user.id)
       );
 
-      if (existingTeam) {
+      const isSubstitute =
+        currentEvent.substitutes &&
+        currentEvent.substitutes.some(
+          (sub) => sub.userId === interaction.user.id
+        );
+
+      if (existingTeam || isSubstitute) {
         await interaction.reply({
-          content: `Вы уже зарегистрированы в команде: ${existingTeam.name}.`,
+          content: existingTeam
+            ? `Вы уже зарегистрированы в команде: ${existingTeam.name}.`
+            : "Вы уже находитесь в списке запасных.",
           ephemeral: true,
         });
         return;
       }
 
-      // Проверяем, есть ли поле substitutes (скамейка запасных), если нет — создаем его
       if (!currentEvent.substitutes) {
         currentEvent.substitutes = [];
       }
 
-      const isSubstitute = currentEvent.substitutes.some(
-        (sub) => sub.userId === interaction.user.id
-      );
-
-      if (isSubstitute) {
-        await interaction.reply({
-          content: "Вы уже находитесь в списке запасных.",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      // Фильтруем команды, где количество участников меньше maxPlayersPerTeam
       const maxPlayersPerTeam = currentEvent.maxPlayersPerTeam || Infinity;
       const availableTeams = currentEvent.teams.filter(
         (team) => team.members.length < maxPlayersPerTeam
       );
 
-      if (availableTeams.length === 0) {
-        // Добавляем пользователя в скамейку запасных
-        currentEvent.substitutes.push({
-          userId: interaction.user.id,
-          username: interaction.user.username,
-        });
-
-        await events.updateOne(
-          { eventId: currentEvent.eventId },
-          { $set: { substitutes: currentEvent.substitutes } }
-        );
-
-        await interaction.reply({
-          content:
-            "Все команды уже заполнены. Вы добавлены в список запасных участников.",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      // Формируем меню выбора только с доступными командами
       const teamOptions = availableTeams.map((team) =>
         new StringSelectMenuOptionBuilder()
           .setLabel(team.name)
           .setValue(team.name)
+      );
+
+      teamOptions.push(
+        new StringSelectMenuOptionBuilder()
+          .setLabel("Скамья запасных")
+          .setValue("substitutes")
       );
 
       const teamSelectMenu = new StringSelectMenuBuilder()
@@ -223,26 +221,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
         content: "Произошла ошибка при обработке команды.",
         ephemeral: true,
       });
-    } finally {
-      await mongoClient.close();
     }
   }
 
   if (interaction.isButton()) {
-    const mongoClient = new MongoClient(process.env.MONGO_URI);
     const [action, userId, teamName] = interaction.customId.split("_");
     try {
-      const db = mongoClient.db("SquadJS");
-      const events = db.collection("events");
-      const notifications = db.collection("notifications");
+      const events = await getCollection("events");
+      const notifications = await getCollection("notifications");
 
       if (action === "confirmDM") {
         // Подтверждение регистрации
-        if (timers.has(userId)) {
-          clearTimeout(timers.get(userId));
-          timers.delete(userId);
-        }
-
         await notifications.updateOne(
           { userId, teamName, status: "pending" },
           { $set: { status: "confirmed" } }
@@ -257,11 +246,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         );
       } else if (action === "cancelDM") {
         try {
-          if (timers.has(userId)) {
-            clearTimeout(timers.get(userId)); // Завершаем таймер
-            timers.delete(userId); // Удаляем из карты
-          }
-
           const event = await events.findOne({ "teams.name": teamName });
 
           if (!event) {
@@ -284,30 +268,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
               { $set: { teams: event.teams } }
             );
 
-            // Обновляем Embed с регистрацией
-            const eventChannel = await interaction.client.channels.fetch(
-              event.channelId
-            );
-            const eventMessage = await eventChannel.messages.fetch(
-              event.eventId
-            );
-
-            const maxPlayersPerTeam = event.maxPlayersPerTeam || "∞";
-
-            const updatedEmbed = EmbedBuilder.from(
-              eventMessage.embeds[0]
-            ).setFields(
-              event.teams.map((team) => ({
-                name: `${team.name} (${team.members.length}/${maxPlayersPerTeam})`,
-                value:
-                  team.members
-                    .map((member) => `${member.nickname} (${member.steamId})`)
-                    .join("\n") || "-",
-                inline: true,
-              }))
-            );
-
-            await eventMessage.edit({ embeds: [updatedEmbed] });
+            await updateEventEmbed(client, event);
 
             console.log(
               `Игрок ${userId} удалён из команды ${teamName} и данные обновлены.`
@@ -343,12 +304,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   if (interaction.isButton() && interaction.customId === "cancel") {
-    const mongoClient = new MongoClient(process.env.MONGO_URI);
-
     try {
-      await mongoClient.connect();
-      const db = mongoClient.db("SquadJS");
-      const events = db.collection("events");
+      const events = await getCollection("events");
 
       const event = await events.findOne({ eventId: interaction.message.id });
 
@@ -361,7 +318,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       const userId = interaction.user.id;
-
       let removed = false;
 
       // Удаляем игрока из списка участников команды
@@ -376,9 +332,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
       });
 
+      // Удаляем игрока из списка запасных
+      if (event.substitutes) {
+        const substituteIndex = event.substitutes.findIndex(
+          (sub) => sub.userId === userId
+        );
+
+        if (substituteIndex !== -1) {
+          event.substitutes.splice(substituteIndex, 1);
+          removed = true;
+        }
+      }
+
       if (!removed) {
         await interaction.reply({
-          content: "Вы не зарегистрированы ни в одной команде.",
+          content:
+            "Вы не зарегистрированы ни в одной команде и не находитесь в списке запасных.",
           ephemeral: true,
         });
         return;
@@ -387,7 +356,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       // Обновляем данные в базе данных
       await events.updateOne(
         { eventId: event.eventId },
-        { $set: { teams: event.teams } }
+        { $set: { teams: event.teams, substitutes: event.substitutes } }
       );
 
       // Обновляем сообщение с регистрацией
@@ -409,32 +378,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // Получаем максимальное количество игроков на команду
-      const maxPlayersPerTeam = event.maxPlayersPerTeam || "∞";
-
-      // Формируем обновленные поля для embed
-      const updatedFields = event.teams.map((team) => ({
-        name: `${team.name} (${team.members.length}/${maxPlayersPerTeam})`,
-        value:
-          team.members
-            .map((member) => `${member.nickname} (${member.steamId})`)
-            .join("\n") || "-",
-        inline: true,
-      }));
-
-      // Обновляем embed
-      const existingEmbed = eventMessage.embeds?.[0];
-      const updatedEmbed = existingEmbed
-        ? EmbedBuilder.from(existingEmbed)
-        : new EmbedBuilder()
-            .setTitle("Регистрация на турнир")
-            .setColor("#3498DB");
-
-      updatedEmbed.setFields(updatedFields);
-
-      await eventMessage.edit({
-        embeds: [updatedEmbed],
-      });
+      await updateEventEmbed(client, event);
 
       await interaction.reply({
         content: "Ваша регистрация была успешно отменена.",
@@ -446,8 +390,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         content: "Произошла ошибка при отмене регистрации.",
         ephemeral: true,
       });
-    } finally {
-      await mongoClient.close();
     }
   }
 
@@ -508,7 +450,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     interaction.customId.startsWith("register_modal_")
   ) {
     const selectedTeam = interaction.customId.replace("register_modal_", "");
-    const steamId = interaction.fields.getTextInputValue("steamid_input");
+    let steamId = interaction.fields.getTextInputValue("steamid_input");
     const squadLeader =
       interaction.fields.getTextInputValue("squad_leader_input");
     const squadHours =
@@ -523,32 +465,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     const userId = interaction.user.id;
-    const teamIndex = currentEvent.teams.findIndex(
-      (team) => team.name === selectedTeam
-    );
-
-    if (teamIndex === -1) {
-      await interaction.reply({
-        content: "Выбранная команда не существует.",
-        ephemeral: true,
-      });
-      return;
-    }
-
-    const existingTeam = currentEvent.teams.find((team) =>
-      team.members.some((member) => member.userId === userId)
-    );
-
-    if (existingTeam) {
-      await interaction.reply({
-        content: `Вы уже зарегистрированы в команде: ${existingTeam.name}.`,
-        ephemeral: true,
-      });
-      return;
-    }
 
     // Получение информации о никнейме из Steam API
     const steamApiKey = process.env.STEAM_API_KEY;
+    steamId = await getSteamId64(steamApiKey, steamId);
     const steamApiUrl = `http://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=${steamApiKey}&steamids=${steamId}`;
     let nickname;
 
@@ -570,73 +490,86 @@ client.on(Events.InteractionCreate, async (interaction) => {
       nickname = "Неизвестный игрок";
     }
 
-    currentEvent.teams[teamIndex].members.push({
-      userId,
-      nickname,
-      steamId,
-      squadLeader,
-      squadHours,
-    });
+    if (selectedTeam === "substitutes") {
+      if (!currentEvent.substitutes) {
+        currentEvent.substitutes = [];
+      }
 
-    const mongoClient = new MongoClient(process.env.MONGO_URI);
+      const isSubstitute = currentEvent.substitutes.some(
+        (sub) => sub.userId === userId
+      );
+
+      if (isSubstitute) {
+        await interaction.reply({
+          content: "Вы уже находитесь в списке запасных.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      currentEvent.substitutes.push({
+        userId,
+        nickname,
+        steamId,
+        squadLeader,
+        squadHours,
+      });
+    } else {
+      const teamIndex = currentEvent.teams.findIndex(
+        (team) => team.name === selectedTeam
+      );
+
+      if (teamIndex === -1) {
+        await interaction.reply({
+          content: "Выбранная команда не существует.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const existingTeam = currentEvent.teams.find((team) =>
+        team.members.some((member) => member.userId === userId)
+      );
+
+      if (existingTeam) {
+        await interaction.reply({
+          content: `Вы уже зарегистрированы в команде: ${existingTeam.name}.`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      currentEvent.teams[teamIndex].members.push({
+        userId,
+        nickname,
+        steamId,
+        squadLeader,
+        squadHours,
+      });
+    }
 
     try {
-      await mongoClient.connect();
-      const db = mongoClient.db("SquadJS");
-      const events = db.collection("events");
-
+      const events = await getCollection("events");
       await events.updateOne(
         { eventId: currentEvent.eventId },
-        { $set: { teams: currentEvent.teams } }
+        {
+          $set: {
+            teams: currentEvent.teams,
+            substitutes: currentEvent.substitutes,
+          },
+        }
       );
 
-      const eventChannel = await client.channels.fetch(currentEvent.channelId);
-      if (!eventChannel) {
-        await interaction.reply({
-          content: "Ошибка: канал события не найден.",
-          ephemeral: true,
-        });
-        return;
-      }
+      const event = await events.findOne({ eventId: currentEvent.eventId });
+      console.log(currentEvent.eventId);
 
-      const eventMessage = await eventChannel.messages.fetch(
-        currentEvent.eventId
-      );
-      if (!eventMessage) {
-        await interaction.reply({
-          content: "Ошибка: сообщение события не найдено.",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      // Обновляем Embed
-      const existingEmbed = eventMessage.embeds?.[0];
-      const updatedEmbed = existingEmbed
-        ? EmbedBuilder.from(existingEmbed)
-        : new EmbedBuilder()
-            .setTitle("Регистрация на турнир")
-            .setColor("#3498DB");
-
-      const maxPlayersPerTeam = currentEvent.maxPlayersPerTeam || "∞";
-
-      const updatedFields = currentEvent.teams.map((team) => ({
-        name: `${team.name} (${team.members.length}/${maxPlayersPerTeam})`,
-        value:
-          team.members
-            .map((member) => `${member.nickname} (${member.steamId})`)
-            .join("\n") || "-",
-        inline: true,
-      }));
-
-      updatedEmbed.setFields(updatedFields);
-
-      await eventMessage.edit({
-        embeds: [updatedEmbed],
-      });
-
+      await updateEventEmbed(client, event);
       await interaction.reply({
-        content: `Вы успешно зарегистрированы в команде ${selectedTeam}.`,
+        content: `Вы успешно зарегистрированы в ${
+          selectedTeam === "substitutes"
+            ? "списке запасных"
+            : `команде ${selectedTeam}`
+        }.`,
         ephemeral: true,
       });
     } catch (error) {
@@ -645,8 +578,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         content: "Произошла ошибка при регистрации.",
         ephemeral: true,
       });
-    } finally {
-      await mongoClient.close();
     }
   }
 });
