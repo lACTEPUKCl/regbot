@@ -18,9 +18,10 @@ export const restoreTimers = async (client) => {
       const { userId, teamName, eventId, endTime, messageId, channelId, _id } =
         notification;
       const remainingTime = new Date(endTime).getTime() - Date.now();
+      const jobTime = new Date(endTime);
 
       if (remainingTime > 0) {
-        schedule.scheduleJob(endTime, async () => {
+        schedule.scheduleJob(jobTime, async () => {
           try {
             const events = await getCollection("events");
             const event = await events.findOne({ eventId });

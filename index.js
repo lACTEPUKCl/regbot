@@ -40,7 +40,7 @@ for (const command of commands) {
 
 client.on("ready", async () => {
   console.log(`Logged in as ${client.user.tag}!`);
-  await restoreTimers();
+  await restoreTimers(client);
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
