@@ -157,10 +157,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const notificationsCollection = await getCollection("notifications");
 
         if (action === "confirmDM") {
-          await notificationsCollection.updateOne(
-            { userId, teamName, status: "pending" },
-            { $set: { status: "confirmed" } }
-          );
+          await notificationsCollection.deleteOne({
+            userId,
+            teamName,
+            status: "pending",
+          });
 
           await interaction.reply({
             content: `Вы подтвердили участие в команде ${teamName}.`,

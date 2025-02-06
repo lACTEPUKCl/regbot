@@ -7,6 +7,7 @@ import {
   ButtonStyle,
   PermissionFlagsBits,
 } from "discord.js";
+import { DateTime } from "luxon";
 import { getCollection } from "../utils/mongodb.js";
 
 const notification = new SlashCommandBuilder()
@@ -49,8 +50,10 @@ const execute = async (interaction) => {
 
     const teamNames = teamsInput.split(",").map((name) => name.trim());
 
-    const sendTime = new Date(sendTimeInput.replace(" ", "T") + ":00.000Z");
-    sendTime.setHours(sendTime.getHours() - 3);
+    // Парсим время, введённое пользователем, как московское
+    let sendTime = DateTime.fromFormat(sendTimeInput, "yyyy-MM-dd HH:mm", {
+      zone: "Europe/Moscow",
+    }).toJSDate();
 
     if (isNaN(sendTime.getTime())) {
       await interaction.reply({
@@ -175,6 +178,8 @@ const execute = async (interaction) => {
                 .catch(() => null);
 
               await notifications.deleteOne({ _id: notification._id });
+
+              await updateEventEmbed(interaction.client, event);
               console.log(
                 `Игрок ${member.userId} удален из команды ${team.name} за неответ.`
               );
