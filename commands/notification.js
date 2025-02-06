@@ -9,6 +9,7 @@ import {
 } from "discord.js";
 import { DateTime } from "luxon";
 import { getCollection } from "../utils/mongodb.js";
+import { updateEventEmbed } from "../utils/updateEventEmbed.js";
 
 const notification = new SlashCommandBuilder()
   .setName("notification")
