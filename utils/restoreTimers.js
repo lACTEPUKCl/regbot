@@ -24,7 +24,6 @@ export const restoreTimers = async (client) => {
         schedule.scheduleJob(jobTime, async () => {
           try {
             const events = await getCollection("events");
-            if (!event) return;
 
             // Удаляем игрока из команды
             const playerRemoved = await removePlayerFromTeam(
@@ -35,6 +34,7 @@ export const restoreTimers = async (client) => {
 
             if (!playerRemoved) return;
             const event = await events.findOne({ eventId });
+            if (!event) return;
             // Обновляем Embed в канале события
             await updateEventEmbed(client, event);
 
