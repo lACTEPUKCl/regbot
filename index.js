@@ -72,7 +72,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     // Обработка кнопок
     else if (interaction.isButton()) {
       // Обработка кнопки регистрации (customId === "register")
-      if (interaction.customId === "register") {
+      if (interaction.customId.startsWith("register_")) {
         const eventsCollection = await getCollection("events");
         const eventId = interaction.message.id;
         const currentEvent = await eventsCollection.findOne({ eventId });
@@ -136,6 +136,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       // Обработка кнопок подтверждения/отмены в DM (customId: confirmDM_userId_teamName или cancelDM_userId_teamName)
+      // Обработка кнопок подтверждения/отмены в DM (customId: confirmDM_userId_teamName или cancelDM_userId_teamName)
       else if (
         interaction.customId.startsWith("confirmDM_") ||
         interaction.customId.startsWith("cancelDM_")
@@ -148,21 +149,60 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
           return;
         }
-        const action = parts[0];
+        const action = parts[0]; // confirmDM или cancelDM
         const userId = parts[1];
-        // Если в названии команды могут быть символы "_", объединяем оставшиеся части
+        // Если в названии команды могут быть символы "_" — объединяем оставшиеся части
         const teamName = parts.slice(2).join("_");
 
         const eventsCollection = await getCollection("events");
         const notificationsCollection = await getCollection("notifications");
 
+        // Пытаемся найти уведомление для данного пользователя, команды и события
+        const notification = await notificationsCollection.findOne({
+          userId,
+          teamName,
+          status: "pending",
+        });
+
+        // Если уведомление найдено и содержит данные о канале и сообщении, удаляем сообщение из DM
+        if (notification && notification.channelId && notification.messageId) {
+          try {
+            const dmChannel = await interaction.client.channels.fetch(
+              notification.channelId
+            );
+            if (dmChannel) {
+              const dmMessage = await dmChannel.messages
+                .fetch(notification.messageId)
+                .catch(() => null);
+              if (dmMessage) {
+                await dmMessage.delete();
+                console.log(`DM-сообщение ${notification.messageId} удалено.`);
+              }
+            }
+          } catch (err) {
+            console.error("Ошибка при удалении DM-сообщения:", err);
+          }
+        }
+
         if (action === "confirmDM") {
-          await notificationsCollection.deleteOne({
+          // Для подтверждения можно просто удалить уведомление и обновить эмбед, если уведомление содержит eventId
+          if (notification && notification.eventId) {
+            const event = await eventsCollection.findOne({
+              eventId: notification.eventId,
+            });
+            if (event) {
+              await updateEventEmbed(interaction.client, event);
+              console.log(
+                `Эмбед события ${event.eventId} обновлён (confirmDM).`
+              );
+            }
+          }
+          // Удаляем уведомление из базы данных
+          const deleteResult = await notificationsCollection.deleteOne({
             userId,
             teamName,
             status: "pending",
           });
-
           await interaction.reply({
             content: `Вы подтвердили участие в команде ${teamName}.`,
             ephemeral: true,
@@ -171,6 +211,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             `Игрок ${userId} подтвердил участие в команде ${teamName}.`
           );
         } else if (action === "cancelDM") {
+          // Находим событие, в котором есть команда с указанным именем
           const event = await eventsCollection.findOne({
             "teams.name": teamName,
           });
@@ -181,26 +222,58 @@ client.on(Events.InteractionCreate, async (interaction) => {
             });
             return;
           }
-          const team = event.teams.find((t) => t.name === teamName);
-          if (team) {
-            team.members = team.members.filter((m) => m.userId !== userId);
-            await eventsCollection.updateOne(
-              { eventId: event.eventId },
-              { $set: { teams: event.teams } }
-            );
-            await updateEventEmbed(client, event);
-            console.log(
-              `Игрок ${userId} удалён из команды ${teamName} и данные обновлены.`
-            );
+          // Удаляем пользователя из участников нужной команды
+          let userRemoved = false;
+          for (const team of event.teams) {
+            if (team.name === teamName) {
+              const initialCount = team.members.length;
+              team.members = team.members.filter((m) => m.userId !== userId);
+              if (team.members.length < initialCount) {
+                userRemoved = true;
+                console.log(
+                  `Пользователь ${userId} удалён из команды ${teamName}.`
+                );
+              }
+            }
           }
-
-          await notificationsCollection.deleteOne({
+          if (!userRemoved) {
+            await interaction.reply({
+              content: "Вы не были зарегистрированы в этой команде.",
+              ephemeral: true,
+            });
+            return;
+          }
+          // Обновляем событие в базе данных
+          const updateResult = await eventsCollection.updateOne(
+            { eventId: event.eventId },
+            { $set: { teams: event.teams } }
+          );
+          if (updateResult.modifiedCount === 0) {
+            await interaction.reply({
+              content: "Не удалось обновить данные о событии в базе данных.",
+              ephemeral: true,
+            });
+            return;
+          }
+          // Удаляем уведомление из базы
+          const delNotifResult = await notificationsCollection.deleteOne({
             userId,
             teamName,
             eventId: event.eventId,
             status: "pending",
           });
-
+          console.log(
+            "Уведомление после отмены удалено, результат:",
+            delNotifResult
+          );
+          // Получаем обновлённое событие и обновляем эмбед
+          const updatedEvent = await eventsCollection.findOne({
+            eventId: event.eventId,
+          });
+          if (updatedEvent) {
+            await updateEventEmbed(interaction.client, updatedEvent);
+            console.log(`Эмбед события ${event.eventId} обновлён (cancelDM).`);
+          }
           await interaction.reply({
             content: `Вы отменили участие в команде ${teamName}.`,
             ephemeral: true,
@@ -208,8 +281,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         return;
       }
+
       // Обработка кнопки отмены регистрации (customId === "cancel")
-      else if (interaction.customId === "cancel") {
+      else if (interaction.customId.startsWith("cancel_")) {
         const eventsCollection = await getCollection("events");
         const eventId = interaction.message.id;
         const event = await eventsCollection.findOne({ eventId });
@@ -312,29 +386,29 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const steamIdInput = new TextInputBuilder()
         .setCustomId("steamid_input")
-        .setLabel("Введите ваш Steam ID")
-        .setPlaceholder("Ваш Steam ID")
+        .setLabel("Введите ссылку на профиль Steam или SteamID64")
+        .setPlaceholder("Пример: https://steamcommunity.com/id/yourprofile")
         .setStyle(TextInputStyle.Short)
         .setRequired(true);
 
-      const squadLeaderInput = new TextInputBuilder()
-        .setCustomId("squad_leader_input")
-        .setLabel("Хотите ли вы быть сквадным?")
-        .setPlaceholder("Да/Нет")
+      const clanTagInput = new TextInputBuilder()
+        .setCustomId("clan_tag_input")
+        .setLabel("Введите клан тег (без скобок)")
+        .setPlaceholder("Пример: ABC или XYZ")
         .setStyle(TextInputStyle.Short)
         .setRequired(true);
 
-      const squadHoursInput = new TextInputBuilder()
-        .setCustomId("squad_hours_input")
-        .setLabel("Сколько часов вы провели в Squad?")
-        .setPlaceholder("Введите количество часов")
+      const discordInviteInput = new TextInputBuilder()
+        .setCustomId("discord_invite_input")
+        .setLabel("Введите ссылку на Discord сообщество")
+        .setPlaceholder("Пример: https://discord.gg/yourclan")
         .setStyle(TextInputStyle.Short)
         .setRequired(true);
 
       modal.addComponents(
         new ActionRowBuilder().addComponents(steamIdInput),
-        new ActionRowBuilder().addComponents(squadLeaderInput),
-        new ActionRowBuilder().addComponents(squadHoursInput)
+        new ActionRowBuilder().addComponents(clanTagInput),
+        new ActionRowBuilder().addComponents(discordInviteInput)
       );
 
       await interaction.showModal(modal);
@@ -343,7 +417,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       interaction.isModalSubmit() &&
       interaction.customId.startsWith("register_modal_")
     ) {
-      // customId имеет формат: "register_modal_{selectedTeam}_{eventId}"
       const parts = interaction.customId.split("_");
       if (parts.length < 4) {
         await interaction.reply({
@@ -356,10 +429,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const eventId = parts.slice(3).join("_");
 
       const steamIdRaw = interaction.fields.getTextInputValue("steamid_input");
-      const squadLeader =
-        interaction.fields.getTextInputValue("squad_leader_input");
-      const squadHours =
-        interaction.fields.getTextInputValue("squad_hours_input");
+      const clanTag = interaction.fields.getTextInputValue("clan_tag_input");
+      const discordLink = interaction.fields.getTextInputValue(
+        "discord_invite_input"
+      );
 
       const eventsCollection = await getCollection("events");
       const currentEvent = await eventsCollection.findOne({ eventId });
@@ -423,8 +496,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           userId,
           nickname,
           steamId,
-          squadLeader,
-          squadHours,
+          clanTag,
+          discordLink,
         });
       } else {
         const teamIndex = currentEvent.teams.findIndex(
@@ -451,8 +524,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           userId,
           nickname,
           steamId,
-          squadLeader,
-          squadHours,
+          clanTag,
+          discordLink,
         });
       }
 

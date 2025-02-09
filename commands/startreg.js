@@ -124,19 +124,7 @@ const execute = async (interaction) => {
     });
   });
 
-  // Кнопки для регистрации
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`register_${message.id}`) // добавляем eventId в customId
-      .setLabel("Регистрация")
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(`cancel_${message.id}`) // аналогично для отмены
-      .setLabel("Отмена")
-      .setStyle(ButtonStyle.Danger)
-  );
-
-  // Отправляем сообщение в канал сервера
+  // Ищем канал для публикации события
   const eventChannel = interaction.guild.channels.cache.find(
     (ch) => ch.type === ChannelType.GuildText && ch.name === "test"
   );
@@ -146,9 +134,39 @@ const execute = async (interaction) => {
     return;
   }
 
+  // Шаг 1: Создаем временные (placeholder) кнопки
+  const placeholderRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("register_placeholder")
+      .setLabel("Регистрация")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId("cancel_placeholder")
+      .setLabel("Отмена")
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  // Шаг 2: Отправляем сообщение с embed и placeholder кнопками, чтобы получить message.id
   const message = await eventChannel.send({
     embeds: [embed],
-    components: [row],
+    components: [placeholderRow],
+  });
+
+  // Шаг 3: Создаем обновленный ряд кнопок, используя message.id
+  const updatedRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`register_${message.id}`)
+      .setLabel("Регистрация")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`cancel_${message.id}`)
+      .setLabel("Отмена")
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  // Шаг 4: Редактируем сообщение, заменяя placeholder кнопки обновленными
+  await message.edit({
+    components: [updatedRow],
   });
 
   try {

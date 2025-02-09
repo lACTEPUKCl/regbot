@@ -28,7 +28,10 @@ export const updateEventEmbed = async (client, event) => {
         name: `${team.name} (${team.members.length}/${maxPlayersPerTeam})`,
         value:
           team.members
-            .map((member) => `${member.nickname} (${member.steamId})`)
+            .map(
+              (member) =>
+                `[${member.clanTag}]${member.nickname} (${member.steamId})`
+            )
             .join("\n") || "-",
         inline: true,
       }))
