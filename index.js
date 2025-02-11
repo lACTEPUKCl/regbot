@@ -9,6 +9,9 @@ import {
   ActionRowBuilder,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ChannelType,
 } from "discord.js";
 import getCommands from "./commands/getCommands.js";
 import { getCollection } from "./utils/mongodb.js";
@@ -71,7 +74,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     // Обработка кнопок
     else if (interaction.isButton()) {
-      // Обработка кнопки регистрации (customId === "register")
+      // Обработка кнопки регистрации (customId начинается с "register_")
       if (interaction.customId.startsWith("register_")) {
         const eventsCollection = await getCollection("events");
         const eventId = interaction.message.id;
@@ -121,7 +124,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         );
 
         const teamSelectMenu = new StringSelectMenuBuilder()
-          // Передаём eventId в customId, чтобы в дальнейшем знать, к какому событию относится выбор
+          // Передаём eventId в customId, чтобы знать, к какому событию относится выбор
           .setCustomId(`team_select_menu_${eventId}`)
           .setPlaceholder("Выберите команду")
           .addOptions(teamOptions);
@@ -136,11 +139,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       // Обработка кнопок подтверждения/отмены в DM (customId: confirmDM_userId_teamName или cancelDM_userId_teamName)
-      // Обработка кнопок подтверждения/отмены в DM (customId: confirmDM_userId_teamName или cancelDM_userId_teamName)
       else if (
         interaction.customId.startsWith("confirmDM_") ||
         interaction.customId.startsWith("cancelDM_")
       ) {
+        // … существующий код обработки confirmDM/cancelDM без изменений …
         const parts = interaction.customId.split("_");
         if (parts.length < 3) {
           await interaction.reply({
@@ -151,20 +154,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         const action = parts[0]; // confirmDM или cancelDM
         const userId = parts[1];
-        // Если в названии команды могут быть символы "_" — объединяем оставшиеся части
         const teamName = parts.slice(2).join("_");
 
         const eventsCollection = await getCollection("events");
         const notificationsCollection = await getCollection("notifications");
 
-        // Пытаемся найти уведомление для данного пользователя, команды и события
         const notification = await notificationsCollection.findOne({
           userId,
           teamName,
           status: "pending",
         });
 
-        // Если уведомление найдено и содержит данные о канале и сообщении, удаляем сообщение из DM
         if (notification && notification.channelId && notification.messageId) {
           try {
             const dmChannel = await interaction.client.channels.fetch(
@@ -185,7 +185,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         if (action === "confirmDM") {
-          // Для подтверждения можно просто удалить уведомление и обновить эмбед, если уведомление содержит eventId
           if (notification && notification.eventId) {
             const event = await eventsCollection.findOne({
               eventId: notification.eventId,
@@ -197,8 +196,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
               );
             }
           }
-          // Удаляем уведомление из базы данных
-          const deleteResult = await notificationsCollection.deleteOne({
+          await notificationsCollection.deleteOne({
             userId,
             teamName,
             status: "pending",
@@ -211,7 +209,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             `Игрок ${userId} подтвердил участие в команде ${teamName}.`
           );
         } else if (action === "cancelDM") {
-          // Находим событие, в котором есть команда с указанным именем
           const event = await eventsCollection.findOne({
             "teams.name": teamName,
           });
@@ -222,7 +219,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             });
             return;
           }
-          // Удаляем пользователя из участников нужной команды
           let userRemoved = false;
           for (const team of event.teams) {
             if (team.name === teamName) {
@@ -243,7 +239,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             });
             return;
           }
-          // Обновляем событие в базе данных
           const updateResult = await eventsCollection.updateOne(
             { eventId: event.eventId },
             { $set: { teams: event.teams } }
@@ -255,18 +250,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
             });
             return;
           }
-          // Удаляем уведомление из базы
-          const delNotifResult = await notificationsCollection.deleteOne({
+          await notificationsCollection.deleteOne({
             userId,
             teamName,
             eventId: event.eventId,
             status: "pending",
           });
-          console.log(
-            "Уведомление после отмены удалено, результат:",
-            delNotifResult
-          );
-          // Получаем обновлённое событие и обновляем эмбед
+          console.log("Уведомление после отмены удалено.");
           const updatedEvent = await eventsCollection.findOne({
             eventId: event.eventId,
           });
@@ -281,8 +271,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
         return;
       }
-
-      // Обработка кнопки отмены регистрации (customId === "cancel")
+      // Обработка кнопки отмены регистрации (customId начинается с "cancel_")
       else if (interaction.customId.startsWith("cancel_")) {
         const eventsCollection = await getCollection("events");
         const eventId = interaction.message.id;
@@ -297,7 +286,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         const userId = interaction.user.id;
         let removed = false;
-        // Удаление из команд
         event.teams.forEach((team) => {
           const index = team.members.findIndex(
             (member) => member.userId === userId
@@ -307,7 +295,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             removed = true;
           }
         });
-        // Удаление из списка запасных
         if (event.substitutes) {
           const subIndex = event.substitutes.findIndex(
             (sub) => sub.userId === userId
@@ -339,7 +326,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
     }
-
     // Обработка выбора команды из меню (select menu)
     else if (
       interaction.isStringSelectMenu() &&
@@ -379,41 +365,88 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      // Создание модального окна с передачей выбранной команды и eventId
-      const modal = new ModalBuilder()
-        .setCustomId(`register_modal_${selectedTeam}_${eventId}`)
-        .setTitle("Регистрация на турнир");
+      // В зависимости от типа ивента показываем разные модальные окна
+      if (currentEvent.eventType === "clan") {
+        const modal = new ModalBuilder()
+          .setCustomId(`register_modal_${selectedTeam}_${eventId}`)
+          .setTitle("Регистрация на турнир");
+        const steamIdInput = new TextInputBuilder()
+          .setCustomId("steamid_input")
+          .setLabel("Введите ссылку на профиль Steam или SteamID64")
+          .setPlaceholder("Пример: https://steamcommunity.com/id/yourprofile")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+        const clanTagInput = new TextInputBuilder()
+          .setCustomId("clan_tag_input")
+          .setLabel("Введите клан тег (без скобок)")
+          .setPlaceholder("Пример: ABC или XYZ")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+        const discordInviteInput = new TextInputBuilder()
+          .setCustomId("discord_invite_input")
+          .setLabel("Введите ссылку на Discord сообщество")
+          .setPlaceholder("Пример: https://discord.gg/yourclan")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+        const numberPlayersInput = new TextInputBuilder()
+          .setCustomId("number_players_input")
+          .setLabel("Введите количество игроков")
+          .setPlaceholder("Пример: 5")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(steamIdInput),
+          new ActionRowBuilder().addComponents(clanTagInput),
+          new ActionRowBuilder().addComponents(discordInviteInput),
+          new ActionRowBuilder().addComponents(numberPlayersInput)
+        );
+        await interaction.showModal(modal);
+      } else if (currentEvent.eventType === "solo") {
+        const modal = new ModalBuilder()
+          .setCustomId(`register_modal_${selectedTeam}_${eventId}`)
+          .setTitle("Регистрация на турнир (Solo)");
 
-      const steamIdInput = new TextInputBuilder()
-        .setCustomId("steamid_input")
-        .setLabel("Введите ссылку на профиль Steam или SteamID64")
-        .setPlaceholder("Пример: https://steamcommunity.com/id/yourprofile")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
+        const steamIdInput = new TextInputBuilder()
+          .setCustomId("steamid_input")
+          .setLabel("Введите ваш Steam ID")
+          .setPlaceholder("Ваш Steam ID")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
 
-      const clanTagInput = new TextInputBuilder()
-        .setCustomId("clan_tag_input")
-        .setLabel("Введите клан тег (без скобок)")
-        .setPlaceholder("Пример: ABC или XYZ")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
+        const squadLeaderInput = new TextInputBuilder()
+          .setCustomId("squad_leader_input")
+          .setLabel("Хотите ли вы быть сквадным?")
+          .setPlaceholder("Да/Нет")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
 
-      const discordInviteInput = new TextInputBuilder()
-        .setCustomId("discord_invite_input")
-        .setLabel("Введите ссылку на Discord сообщество")
-        .setPlaceholder("Пример: https://discord.gg/yourclan")
-        .setStyle(TextInputStyle.Short)
-        .setRequired(true);
+        const squadHoursInput = new TextInputBuilder()
+          .setCustomId("squad_hours_input")
+          .setLabel("Сколько часов вы провели в Squad?")
+          .setPlaceholder("Введите количество часов")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
 
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(steamIdInput),
-        new ActionRowBuilder().addComponents(clanTagInput),
-        new ActionRowBuilder().addComponents(discordInviteInput)
-      );
+        const techSquadInput = new TextInputBuilder()
+          .setCustomId("tech_squad_input")
+          .setLabel("Хотите ли вы быть в отряде 'Тех'?")
+          .setPlaceholder("Да/Нет")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
 
-      await interaction.showModal(modal);
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(steamIdInput),
+          new ActionRowBuilder().addComponents(squadLeaderInput),
+          new ActionRowBuilder().addComponents(techSquadInput),
+          new ActionRowBuilder().addComponents(squadHoursInput)
+        );
+
+        await interaction.showModal(modal);
+      }
       return;
-    } else if (
+    }
+    // Обработка сабмита модального окна
+    else if (
       interaction.isModalSubmit() &&
       interaction.customId.startsWith("register_modal_")
     ) {
@@ -428,12 +461,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const selectedTeam = parts[2];
       const eventId = parts.slice(3).join("_");
 
-      const steamIdRaw = interaction.fields.getTextInputValue("steamid_input");
-      const clanTag = interaction.fields.getTextInputValue("clan_tag_input");
-      const discordLink = interaction.fields.getTextInputValue(
-        "discord_invite_input"
-      );
-
       const eventsCollection = await getCollection("events");
       const currentEvent = await eventsCollection.findOne({ eventId });
       if (!currentEvent) {
@@ -446,10 +473,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const userId = interaction.user.id;
       const steamApiKey = process.env.STEAM_API_KEY;
-      // Получаем steamId64 через функцию getSteamId64
+      const steamIdRaw = interaction.fields.getTextInputValue("steamid_input");
       const steamId = await getSteamId64(steamApiKey, steamIdRaw);
 
-      // Если функция вернула пустое значение или null — Steam ID введён неверно
       if (!steamId) {
         await interaction.reply({
           content:
@@ -478,80 +504,227 @@ client.on(Events.InteractionCreate, async (interaction) => {
         nickname = "Неизвестный игрок";
       }
 
-      if (selectedTeam === "substitutes") {
-        if (!currentEvent.substitutes) {
-          currentEvent.substitutes = [];
-        }
-        const alreadySubstitute = currentEvent.substitutes.some(
-          (sub) => sub.userId === userId
+      // Обработка регистрации для clan-ивента
+      if (currentEvent.eventType === "clan") {
+        const clanTag = interaction.fields.getTextInputValue("clan_tag_input");
+        const discordLink = interaction.fields.getTextInputValue(
+          "discord_invite_input"
         );
-        if (alreadySubstitute) {
+        const numberPlayersRaw = interaction.fields.getTextInputValue(
+          "number_players_input"
+        );
+        const numberPlayers = parseInt(numberPlayersRaw, 10);
+
+        if (isNaN(numberPlayers) || numberPlayers <= 0) {
           await interaction.reply({
-            content: "Вы уже находитесь в списке запасных.",
+            content: "Пожалуйста, введите корректное количество игроков.",
             ephemeral: true,
           });
           return;
         }
-        currentEvent.substitutes.push({
-          userId,
-          nickname,
-          steamId,
-          clanTag,
-          discordLink,
+
+        // Если регистрация идёт в список запасных, проверку лимита можно не делать
+        if (selectedTeam === "substitutes") {
+          if (!currentEvent.substitutes) {
+            currentEvent.substitutes = [];
+          }
+          const alreadySubstitute = currentEvent.substitutes.some(
+            (sub) => sub.userId === userId
+          );
+          if (alreadySubstitute) {
+            await interaction.reply({
+              content: "Вы уже находитесь в списке запасных.",
+              ephemeral: true,
+            });
+            return;
+          }
+          currentEvent.substitutes.push({
+            userId,
+            nickname,
+            steamId,
+            clanTag,
+            discordLink,
+            numberPlayers,
+          });
+        } else {
+          // Находим команду по имени
+          const teamIndex = currentEvent.teams.findIndex(
+            (team) => team.name === selectedTeam
+          );
+          if (teamIndex === -1) {
+            await interaction.reply({
+              content: "Выбранная команда не существует.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          // Проверяем, не зарегистрирован ли уже пользователь в любой команде
+          const alreadyRegistered = currentEvent.teams.some((team) =>
+            team.members.some((member) => member.userId === userId)
+          );
+          if (alreadyRegistered) {
+            await interaction.reply({
+              content: "Вы уже зарегистрированы в команде.",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          // Проверяем, не превышает ли сумма зарегистрированных игроков + новых доступное количество слотов
+          const currentPlayers = currentEvent.teams[teamIndex].members.reduce(
+            (acc, member) => acc + (member.numberPlayers || 1),
+            0
+          );
+          const maxPlayersPerTeam = currentEvent.maxPlayersPerTeam || Infinity;
+
+          if (currentPlayers + numberPlayers > maxPlayersPerTeam) {
+            const freeSlots = maxPlayersPerTeam - currentPlayers;
+            await interaction.reply({
+              content: `В команде **${selectedTeam}** осталось всего **${freeSlots}** свободных мест. Пожалуйста, укажите количество игроков не более этого значения.`,
+              ephemeral: true,
+            });
+            return;
+          }
+
+          // Если всё в порядке – добавляем участника
+          currentEvent.teams[teamIndex].members.push({
+            userId,
+            nickname,
+            steamId,
+            clanTag,
+            discordLink,
+            numberPlayers,
+          });
+        }
+
+        // Обновляем данные события в базе данных
+        await eventsCollection.updateOne(
+          { eventId: currentEvent.eventId },
+          {
+            $set: {
+              teams: currentEvent.teams,
+              substitutes: currentEvent.substitutes,
+            },
+          }
+        );
+
+        const updatedEvent = await eventsCollection.findOne({
+          eventId: currentEvent.eventId,
         });
-      } else {
-        const teamIndex = currentEvent.teams.findIndex(
-          (team) => team.name === selectedTeam
-        );
-        if (teamIndex === -1) {
+
+        // Передаём в функцию обновления Embed (updateEventEmbed) число игроков,
+        // однако сама функция уже суммирует количество игроков по каждому участнику,
+        // поэтому можно передавать просто updatedEvent
+        await updateEventEmbed(client, updatedEvent);
+
+        await interaction.reply({
+          content: `Вы успешно зарегистрированы в ${
+            selectedTeam === "substitutes"
+              ? "списке запасных"
+              : `команде ${selectedTeam}`
+          }.`,
+          ephemeral: true,
+        });
+      } else if (currentEvent.eventType === "solo") {
+        const squadLeader =
+          interaction.fields.getTextInputValue("squad_leader_input");
+        const squadHoursRaw =
+          interaction.fields.getTextInputValue("squad_hours_input");
+        const squadHours = parseInt(squadHoursRaw, 10);
+        const techSquad =
+          interaction.fields.getTextInputValue("tech_squad_input");
+
+        if (isNaN(squadHours) || squadHours < 0) {
           await interaction.reply({
-            content: "Выбранная команда не существует.",
+            content: "Пожалуйста, введите корректное количество часов.",
             ephemeral: true,
           });
           return;
         }
-        const alreadyRegistered = currentEvent.teams.some((team) =>
-          team.members.some((member) => member.userId === userId)
-        );
-        if (alreadyRegistered) {
-          await interaction.reply({
-            content: "Вы уже зарегистрированы в команде.",
-            ephemeral: true,
+
+        // Для соло-ивента регистрируется всегда 1 игрок
+        const numberPlayers = 1;
+
+        if (selectedTeam === "substitutes") {
+          if (!currentEvent.substitutes) {
+            currentEvent.substitutes = [];
+          }
+          const alreadySubstitute = currentEvent.substitutes.some(
+            (sub) => sub.userId === userId
+          );
+          if (alreadySubstitute) {
+            await interaction.reply({
+              content: "Вы уже находитесь в списке запасных.",
+              ephemeral: true,
+            });
+            return;
+          }
+          currentEvent.substitutes.push({
+            userId,
+            nickname,
+            steamId,
+            squadLeader,
+            squadHours,
+            techSquad,
+            numberPlayers,
           });
-          return;
+        } else {
+          const teamIndex = currentEvent.teams.findIndex(
+            (team) => team.name === selectedTeam
+          );
+          if (teamIndex === -1) {
+            await interaction.reply({
+              content: "Выбранная команда не существует.",
+              ephemeral: true,
+            });
+            return;
+          }
+          const alreadyRegistered = currentEvent.teams.some((team) =>
+            team.members.some((member) => member.userId === userId)
+          );
+          if (alreadyRegistered) {
+            await interaction.reply({
+              content: "Вы уже зарегистрированы в команде.",
+              ephemeral: true,
+            });
+            return;
+          }
+          currentEvent.teams[teamIndex].members.push({
+            userId,
+            nickname,
+            steamId,
+            squadLeader,
+            squadHours,
+            techSquad,
+            numberPlayers,
+          });
         }
-        currentEvent.teams[teamIndex].members.push({
-          userId,
-          nickname,
-          steamId,
-          clanTag,
-          discordLink,
+
+        await eventsCollection.updateOne(
+          { eventId: currentEvent.eventId },
+          {
+            $set: {
+              teams: currentEvent.teams,
+              substitutes: currentEvent.substitutes,
+            },
+          }
+        );
+        const updatedEvent = await eventsCollection.findOne({
+          eventId: currentEvent.eventId,
+        });
+        // Для соло-ивента всегда регистрируется 1 игрок
+        await updateEventEmbed(client, updatedEvent, 1);
+        await interaction.reply({
+          content: `Вы успешно зарегистрированы в ${
+            selectedTeam === "substitutes"
+              ? "списке запасных"
+              : `команде ${selectedTeam}`
+          }.`,
+          ephemeral: true,
         });
       }
 
-      await eventsCollection.updateOne(
-        { eventId: currentEvent.eventId },
-        {
-          $set: {
-            teams: currentEvent.teams,
-            substitutes: currentEvent.substitutes,
-          },
-        }
-      );
-
-      const updatedEvent = await eventsCollection.findOne({
-        eventId: currentEvent.eventId,
-      });
-      await updateEventEmbed(client, updatedEvent);
-
-      await interaction.reply({
-        content: `Вы успешно зарегистрированы в ${
-          selectedTeam === "substitutes"
-            ? "списке запасных"
-            : `команде ${selectedTeam}`
-        }.`,
-        ephemeral: true,
-      });
       return;
     }
   } catch (error) {

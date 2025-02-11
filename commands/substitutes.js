@@ -39,15 +39,26 @@ export const execute = async (interaction) => {
     return;
   }
 
-  // Формируем строку со списком запасных
+  // Формируем строку со списком запасных с дополнительной информацией:
+  // - Если указан clanTag – выводим его,
+  // - Если указан numberPlayers (и он больше 1) – выводим количество игроков,
+  // - Если присутствуют поля squadLeader и squadHours – выводим их для solo-ивентов.
   const substitutesList = substitutes
     .map((sub, index) => {
       const displayName = sub.nickname ? sub.nickname : "Без имени";
       const steamInfo = sub.steamId ? ` (SteamID: ${sub.steamId})` : "";
-      const clanTag = sub.clanTag ? `[${sub.clanTag}]` : "";
+      const clanTag = sub.clanTag ? `[${sub.clanTag}] ` : "";
+      const numberPlayers =
+        sub.numberPlayers && sub.numberPlayers > 1
+          ? `| Игроков: ${sub.numberPlayers}`
+          : "";
+      const squadLeader = sub.squadLeader ? `| SL: ${sub.squadLeader}` : "";
+      const squadHours = sub.squadHours
+        ? `| Часов в Squad: ${sub.squadHours}`
+        : "";
       return `${index + 1}. <@${
         sub.userId
-      }> — ${clanTag}${displayName}${steamInfo}`;
+      }> — ${clanTag}${displayName}${steamInfo} ${numberPlayers} ${squadLeader} ${squadHours}`;
     })
     .join("\n");
 

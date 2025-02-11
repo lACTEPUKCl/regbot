@@ -89,15 +89,23 @@ const execute = async (interaction) => {
 
       const maxPlayersPerTeam = event.maxPlayersPerTeam || "∞";
 
-      // Формируем обновленные поля эмбеда для каждой команды
-      const updatedFields = event.teams.map((team) => ({
-        name: `${team.name} (${team.members.length}/${maxPlayersPerTeam})`,
-        value:
+      // Формируем обновленные поля эмбеда для каждой команды,
+      // учитывая, что количество зарегистрированных игроков считается как сумма поля numberPlayers
+      const updatedFields = event.teams.map((team) => {
+        const registeredPlayers = team.members.reduce(
+          (acc, member) => acc + (member.numberPlayers || 1),
+          0
+        );
+        const membersText =
           team.members
             .map((member) => `${member.nickname} (${member.steamId})`)
-            .join("\n") || "-",
-        inline: true,
-      }));
+            .join("\n") || "-";
+        return {
+          name: `${team.name} (${registeredPlayers}/${maxPlayersPerTeam})`,
+          value: membersText,
+          inline: true,
+        };
+      });
 
       const existingEmbed = message.embeds?.[0];
       const updatedEmbed = existingEmbed

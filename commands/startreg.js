@@ -12,7 +12,18 @@ import { getCollection } from "../utils/mongodb.js";
 const startreg = new SlashCommandBuilder()
   .setName("startreg")
   .setDescription("Запуск регистрации на турнир")
-  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+  // Добавляем опцию для выбора типа ивента
+  .addStringOption((option) =>
+    option
+      .setName("event_type")
+      .setDescription("Выберите тип ивента: clan или solo")
+      .setRequired(true)
+      .addChoices(
+        { name: "Clan", value: "clan" },
+        { name: "Solo", value: "solo" }
+      )
+  );
 
 const getImageFromUser = async (dmChannel) => {
   try {
@@ -61,6 +72,9 @@ const getInputFromUser = async (dmChannel, question, validationFn = null) => {
 };
 
 const execute = async (interaction) => {
+  // Получаем тип ивента из опций команды (уже clan или solo)
+  const eventType = interaction.options.getString("event_type").toLowerCase();
+
   const user = interaction.user;
 
   // Создаем канал личных сообщений
@@ -110,9 +124,10 @@ const execute = async (interaction) => {
   // Запрашиваем изображение
   const imageUrl = await getImageFromUser(dmChannel);
 
+  // Формируем embed для события
   const embed = new EmbedBuilder()
     .setTitle("Регистрация на турнир")
-    .setDescription(`${text}`)
+    .setDescription(text)
     .setImage(imageUrl)
     .setColor("#3498DB");
 
@@ -152,14 +167,14 @@ const execute = async (interaction) => {
     components: [placeholderRow],
   });
 
-  // Шаг 3: Создаем обновленный ряд кнопок, используя message.id
+  // Шаг 3: Создаем обновленный ряд кнопок, используя message.id и выбранный тип ивента
   const updatedRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`register_${message.id}`)
+      .setCustomId(`register_${eventType}_${message.id}`)
       .setLabel("Регистрация")
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
-      .setCustomId(`cancel_${message.id}`)
+      .setCustomId(`cancel_${eventType}_${message.id}`)
       .setLabel("Отмена")
       .setStyle(ButtonStyle.Danger)
   );
@@ -178,9 +193,10 @@ const execute = async (interaction) => {
       guildId: interaction.guild.id,
       text,
       imageUrl,
-      status: "active", // Событие активно
-      teams: teams.map((team) => ({ name: team, members: [] })), // Список команд
-      maxPlayersPerTeam, // Количество участников в команде
+      eventType,
+      status: "active",
+      teams: teams.map((team) => ({ name: team, members: [] })),
+      maxPlayersPerTeam,
       createdBy: user.id,
       createdAt: new Date(),
     });
