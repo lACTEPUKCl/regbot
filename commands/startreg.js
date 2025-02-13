@@ -13,7 +13,6 @@ const startreg = new SlashCommandBuilder()
   .setName("startreg")
   .setDescription("Запуск регистрации на турнир")
   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-  // Добавляем опцию для выбора типа ивента
   .addStringOption((option) =>
     option
       .setName("event_type")
@@ -34,17 +33,15 @@ const getImageFromUser = async (dmChannel) => {
       time: 300000,
       errors: ["time"],
     });
-
     const imageAttachment = collected.first().attachments.first();
     if (!imageAttachment) {
       await dmChannel.send("Ошибка: изображение не найдено. Попробуйте снова.");
-      return getImageFromUser(dmChannel); // Рекурсивный вызов для повторного ввода
+      return getImageFromUser(dmChannel);
     }
-
     return imageAttachment.url;
   } catch (error) {
     await dmChannel.send("Время ожидания истекло. Попробуйте снова.");
-    return getImageFromUser(dmChannel); // Рекурсивный вызов для повторного ввода
+    return getImageFromUser(dmChannel);
   }
 };
 
@@ -56,81 +53,92 @@ const getInputFromUser = async (dmChannel, question, validationFn = null) => {
       time: 300000,
       errors: ["time"],
     });
-
     const input = collected.first().content;
-
     if (validationFn && !validationFn(input)) {
       await dmChannel.send("Ошибка: некорректный ввод. Попробуйте снова.");
-      return getInputFromUser(dmChannel, question, validationFn); // Рекурсивный вызов
+      return getInputFromUser(dmChannel, question, validationFn);
     }
-
     return input;
   } catch (error) {
     await dmChannel.send("Время ожидания истекло. Попробуйте снова.");
-    return getInputFromUser(dmChannel, question, validationFn); // Рекурсивный вызов
+    return getInputFromUser(dmChannel, question, validationFn);
   }
 };
 
 const execute = async (interaction) => {
-  // Получаем тип ивента из опций команды (уже clan или solo)
-  const eventType = interaction.options.getString("event_type").toLowerCase();
+  let hasReplied = false; // Флаг, чтобы убедиться, что ответ отправлен только один раз
 
+  // Получаем тип ивента из опций (clan или solo)
+  const eventType = interaction.options.getString("event_type").toLowerCase();
   const user = interaction.user;
 
-  // Создаем канал личных сообщений
+  // Создаем DM-канал
   const dmChannel = await user.createDM().catch((error) => {
     console.error("Ошибка при создании DM-канала:", error.message);
     return null;
   });
-
   if (!dmChannel) {
-    await interaction.reply({
-      content:
-        "Не удалось отправить сообщение в личные сообщения. Проверьте настройки конфиденциальности.",
-      ephemeral: true,
-    });
+    if (!hasReplied) {
+      await interaction.reply({
+        content:
+          "Не удалось отправить сообщение в личные сообщения. Проверьте настройки конфиденциальности.",
+        ephemeral: true,
+      });
+      hasReplied = true;
+    }
     return;
   }
 
-  // Уведомляем пользователя в сервере, что взаимодействие будет в ЛС
-  await interaction.reply({
-    content: "Проверьте личные сообщения для продолжения настройки события.",
-    ephemeral: true,
-  });
+  // Уведомляем пользователя, что дальнейшая настройка будет в ЛС
+  if (!hasReplied) {
+    await interaction.reply({
+      content: "Проверьте личные сообщения для продолжения настройки события.",
+      ephemeral: true,
+    });
+    hasReplied = true;
+  }
 
-  // Запрашиваем текст для описания события
+  // Запрашиваем описание турнира (например, до 2000 символов)
   const text = await getInputFromUser(
     dmChannel,
-    "Введите текст для описания события:",
-    (input) => input.length > 0
+    "Введите описание турнира (не более 2000 символов):",
+    (input) => input.length > 0 && input.length <= 2000
   );
 
-  // Запрашиваем список команд
+  // Запрашиваем список команд (от 1 до 25, каждое не длиннее 50 символов)
   const teamsInput = await getInputFromUser(
     dmChannel,
-    "Введите список команд через запятую:",
-    (input) => input.length > 0
+    "Введите список команд через запятую",
+    (input) => {
+      if (!input.trim()) return false;
+      const arr = input.split(",");
+      if (arr.length === 0 || arr.length > 25) return false;
+      return arr.every(
+        (team) => team.trim().length > 0 && team.trim().length <= 50
+      );
+    }
   );
   const teams = teamsInput.split(",").map((team) => team.trim());
 
   // Запрашиваем число участников в команде
   const maxPlayersPerTeamInput = await getInputFromUser(
     dmChannel,
-    "Введите число участников в команде:",
-    (input) => !isNaN(parseInt(input, 10)) && parseInt(input, 10) > 0
+    "Введите число участников в команде (от 1 до 50):",
+    (input) => {
+      const num = parseInt(input, 10);
+      return !isNaN(num) && num > 0 && num <= 50;
+    }
   );
   const maxPlayersPerTeam = parseInt(maxPlayersPerTeamInput, 10);
 
   // Запрашиваем изображение
   const imageUrl = await getImageFromUser(dmChannel);
 
-  // Формируем embed для события
+  // Формируем Embed для регистрации (без описания, чтобы оно выводилось отдельно)
   const embed = new EmbedBuilder()
     .setTitle("Регистрация на турнир")
-    .setDescription(text)
     .setImage(imageUrl)
     .setColor("#3498DB");
-
   teams.forEach((team) => {
     embed.addFields({
       name: `${team} (0/${maxPlayersPerTeam})`,
@@ -139,17 +147,19 @@ const execute = async (interaction) => {
     });
   });
 
-  // Ищем канал для публикации события
+  // Ищем канал для публикации события (например, канал с именем "test")
   const eventChannel = interaction.guild.channels.cache.find(
     (ch) => ch.type === ChannelType.GuildText && ch.name === "test"
   );
-
   if (!eventChannel) {
-    await dmChannel.send("Ошибка: канал для публикации событий не найден.");
+    if (!hasReplied) {
+      await dmChannel.send("Ошибка: канал для публикации событий не найден.");
+      hasReplied = true;
+    }
     return;
   }
 
-  // Шаг 1: Создаем временные (placeholder) кнопки
+  // Создаем временные placeholder-кнопки
   const placeholderRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("register_placeholder")
@@ -161,13 +171,14 @@ const execute = async (interaction) => {
       .setStyle(ButtonStyle.Danger)
   );
 
-  // Шаг 2: Отправляем сообщение с embed и placeholder кнопками, чтобы получить message.id
+  // Отправляем сообщение с описанием турнира (content) и Embed (без текста)
   const message = await eventChannel.send({
+    content: text,
     embeds: [embed],
     components: [placeholderRow],
   });
 
-  // Шаг 3: Создаем обновленный ряд кнопок, используя message.id и выбранный тип ивента
+  // Создаем обновленный ряд кнопок с использованием message.id и выбранного типа ивента
   const updatedRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(`register_${eventType}_${message.id}`)
@@ -178,15 +189,13 @@ const execute = async (interaction) => {
       .setLabel("Отмена")
       .setStyle(ButtonStyle.Danger)
   );
-
-  // Шаг 4: Редактируем сообщение, заменяя placeholder кнопки обновленными
   await message.edit({
     components: [updatedRow],
   });
 
+  // Сохраняем событие в базе
   try {
     const events = await getCollection("events");
-
     await events.insertOne({
       eventId: message.id,
       channelId: eventChannel.id,
@@ -200,11 +209,16 @@ const execute = async (interaction) => {
       createdBy: user.id,
       createdAt: new Date(),
     });
-
-    await dmChannel.send("Регистрация успешно создана!");
+    if (!hasReplied) {
+      await dmChannel.send("Регистрация успешно создана!");
+      hasReplied = true;
+    }
   } catch (error) {
     console.error(error);
-    await dmChannel.send("Произошла ошибка при сохранении события.");
+    if (!hasReplied) {
+      await dmChannel.send("Произошла ошибка при сохранении события.");
+      hasReplied = true;
+    }
   }
 };
 

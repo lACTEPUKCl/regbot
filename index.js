@@ -9,9 +9,6 @@ import {
   ActionRowBuilder,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ChannelType,
 } from "discord.js";
 import getCommands from "./commands/getCommands.js";
 import { getCollection } from "./utils/mongodb.js";
@@ -108,9 +105,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         // Формирование списка доступных команд
         const maxPlayersPerTeam = currentEvent.maxPlayersPerTeam || Infinity;
-        const availableTeams = currentEvent.teams.filter(
-          (team) => team.members.length < maxPlayersPerTeam
-        );
+        const availableTeams = currentEvent.teams.filter((team) => {
+          const currentPlayers = team.members.reduce(
+            (acc, member) => acc + (member.numberPlayers || 1), // Считаем всех игроков, учитывая число игроков в каждой записи
+            0
+          );
+          const freeSlots = maxPlayersPerTeam - currentPlayers;
+          return freeSlots > 0; // Если есть хотя бы одно свободное место, команда доступна
+        });
+
         const teamOptions = availableTeams.map((team) =>
           new StringSelectMenuOptionBuilder()
             .setLabel(team.name)
@@ -475,6 +478,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const steamApiKey = process.env.STEAM_API_KEY;
       const steamIdRaw = interaction.fields.getTextInputValue("steamid_input");
       const steamId = await getSteamId64(steamApiKey, steamIdRaw);
+      let game;
 
       if (!steamId) {
         await interaction.reply({
@@ -485,17 +489,31 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      const steamApiUrl = `http://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=${steamApiKey}&steamids=${steamId}`;
+      // Используем GetOwnedGames для получения времени в игре
+      const steamApiUrl = `http://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${steamApiKey}&steamid=${steamId}&include_played_free_games=1`;
+
       let nickname;
+
       try {
         const response = await fetch(steamApiUrl);
         const data = await response.json();
+
+        if (data.response && data.response.games) {
+          game = data.response.games.find((game) => game.appid === 393380);
+        }
+
+        // Получаем имя игрока через GetPlayerSummaries
+        const playerResponse = await fetch(
+          `http://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=${steamApiKey}&steamids=${steamId}`
+        );
+        const playerData = await playerResponse.json();
+
         if (
-          data.response &&
-          data.response.players &&
-          data.response.players.length
+          playerData.response &&
+          playerData.response.players &&
+          playerData.response.players.length
         ) {
-          nickname = data.response.players[0].personaname;
+          nickname = playerData.response.players[0].personaname;
         } else {
           nickname = "Неизвестный игрок";
         }
@@ -523,7 +541,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
           return;
         }
 
-        // Если регистрация идёт в список запасных, проверку лимита можно не делать
+        // Добавляем проверку: введённое количество не должно превышать максимальное число участников в отряде
+        if (numberPlayers > currentEvent.maxPlayersPerTeam) {
+          await interaction.reply({
+            content: `Количество игроков не может превышать максимально возможное значение (${currentEvent.maxPlayersPerTeam}).`,
+            ephemeral: true,
+          });
+          return;
+        }
+
+        // Если регистрация идёт в список запасных, проверку лимита можно не делать, но число игроков всё равно должно быть валидным
         if (selectedTeam === "substitutes") {
           if (!currentEvent.substitutes) {
             currentEvent.substitutes = [];
@@ -547,7 +574,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             numberPlayers,
           });
         } else {
-          // Находим команду по имени
+          // Регистрация в конкретную команду:
           const teamIndex = currentEvent.teams.findIndex(
             (team) => team.name === selectedTeam
           );
@@ -571,7 +598,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             return;
           }
 
-          // Проверяем, не превышает ли сумма зарегистрированных игроков + новых доступное количество слотов
+          // Проверяем, не превышает ли сумма зарегистрированных игроков + новых доступное число слотов
           const currentPlayers = currentEvent.teams[teamIndex].members.reduce(
             (acc, member) => acc + (member.numberPlayers || 1),
             0
@@ -587,7 +614,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             return;
           }
 
-          // Если всё в порядке – добавляем участника
           currentEvent.teams[teamIndex].members.push({
             userId,
             nickname,
@@ -598,7 +624,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           });
         }
 
-        // Обновляем данные события в базе данных
+        // Обновляем данные события в базе данных и эмбед
         await eventsCollection.updateOne(
           { eventId: currentEvent.eventId },
           {
@@ -612,10 +638,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const updatedEvent = await eventsCollection.findOne({
           eventId: currentEvent.eventId,
         });
-
-        // Передаём в функцию обновления Embed (updateEventEmbed) число игроков,
-        // однако сама функция уже суммирует количество игроков по каждому участнику,
-        // поэтому можно передавать просто updatedEvent
         await updateEventEmbed(client, updatedEvent);
 
         await interaction.reply({
@@ -631,11 +653,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
           interaction.fields.getTextInputValue("squad_leader_input");
         const squadHoursRaw =
           interaction.fields.getTextInputValue("squad_hours_input");
-        const squadHours = parseInt(squadHoursRaw, 10);
         const techSquad =
           interaction.fields.getTextInputValue("tech_squad_input");
 
-        if (isNaN(squadHours) || squadHours < 0) {
+        let squadHours;
+
+        // Если время было получено с Steam API, оставляем звездочки
+        if (game && game.playtime_forever) {
+          squadHours = `**${(game.playtime_forever / 60).toFixed(0)}**`;
+        } else {
+          squadHours = squadHoursRaw;
+        }
+
+        const squadHoursNumeric = parseInt(squadHours.replace(/\*\*/g, ""), 10);
+
+        // Проверка на корректность числового значения
+        if (isNaN(squadHoursNumeric) || squadHoursNumeric < 0) {
           await interaction.reply({
             content: "Пожалуйста, введите корректное количество часов.",
             ephemeral: true,
