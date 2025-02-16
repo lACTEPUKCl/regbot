@@ -148,9 +148,10 @@ const execute = async (interaction) => {
   });
 
   // Ищем канал для публикации события (например, канал с именем "test")
-  const eventChannel = interaction.guild.channels.cache.find(
-    (ch) => ch.type === ChannelType.GuildText && ch.name === "test"
+  const eventChannel = interaction.guild.channels.cache.get(
+    "1336112109041487872"
   );
+
   if (!eventChannel) {
     if (!hasReplied) {
       await dmChannel.send("Ошибка: канал для публикации событий не найден.");
