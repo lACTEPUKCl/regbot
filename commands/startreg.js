@@ -24,6 +24,62 @@ const startreg = new SlashCommandBuilder()
       )
   );
 
+// Функция для ввода сообщения от пользователя через DM
+const getInputFromUser = async (dmChannel, question, validationFn = null) => {
+  try {
+    await dmChannel.send(question);
+    const collected = await dmChannel.awaitMessages({
+      max: 1,
+      time: 300000,
+      errors: ["time"],
+    });
+    const input = collected.first().content;
+    if (validationFn && !validationFn(input)) {
+      await dmChannel.send("Ошибка: некорректный ввод. Попробуйте снова.");
+      return getInputFromUser(dmChannel, question, validationFn);
+    }
+    return input;
+  } catch (error) {
+    await dmChannel.send("Время ожидания истекло. Попробуйте снова.");
+    return getInputFromUser(dmChannel, question, validationFn);
+  }
+};
+
+// Функция для ввода списка команд с проверкой на дублирование
+const getTeamsFromUser = async (dmChannel) => {
+  const teamsInput = await getInputFromUser(
+    dmChannel,
+    "Введите список команд через запятую",
+    (input) => {
+      if (!input.trim()) return false;
+      const arr = input.split(",");
+      if (arr.length === 0 || arr.length > 25) return false;
+      return arr.every(
+        (team) => team.trim().length > 0 && team.trim().length <= 50
+      );
+    }
+  );
+  const teams = teamsInput.split(",").map((team) => team.trim());
+
+  // Проверка на повторения (без учета регистра)
+  const frequency = {};
+  teams.forEach((team) => {
+    const key = team.toLowerCase();
+    frequency[key] = (frequency[key] || 0) + 1;
+  });
+  const duplicates = Object.entries(frequency).filter(
+    ([key, count]) => count > 1
+  );
+  if (duplicates.length > 0) {
+    const duplicateNames = duplicates.map(([key]) => key).join(", ");
+    await dmChannel.send(
+      `Обнаружены повторяющиеся названия команд: ${duplicateNames}. Повторите ввод.`
+    );
+    return getTeamsFromUser(dmChannel);
+  }
+  return teams;
+};
+
 const getImageFromUser = async (dmChannel) => {
   try {
     await dmChannel.send("Отправьте изображение для эмбеда:");
@@ -42,26 +98,6 @@ const getImageFromUser = async (dmChannel) => {
   } catch (error) {
     await dmChannel.send("Время ожидания истекло. Попробуйте снова.");
     return getImageFromUser(dmChannel);
-  }
-};
-
-const getInputFromUser = async (dmChannel, question, validationFn = null) => {
-  try {
-    await dmChannel.send(question);
-    const collected = await dmChannel.awaitMessages({
-      max: 1,
-      time: 300000,
-      errors: ["time"],
-    });
-    const input = collected.first().content;
-    if (validationFn && !validationFn(input)) {
-      await dmChannel.send("Ошибка: некорректный ввод. Попробуйте снова.");
-      return getInputFromUser(dmChannel, question, validationFn);
-    }
-    return input;
-  } catch (error) {
-    await dmChannel.send("Время ожидания истекло. Попробуйте снова.");
-    return getInputFromUser(dmChannel, question, validationFn);
   }
 };
 
@@ -105,20 +141,8 @@ const execute = async (interaction) => {
     (input) => input.length > 0 && input.length <= 2000
   );
 
-  // Запрашиваем список команд (от 1 до 25, каждое не длиннее 50 символов)
-  const teamsInput = await getInputFromUser(
-    dmChannel,
-    "Введите список команд через запятую",
-    (input) => {
-      if (!input.trim()) return false;
-      const arr = input.split(",");
-      if (arr.length === 0 || arr.length > 25) return false;
-      return arr.every(
-        (team) => team.trim().length > 0 && team.trim().length <= 50
-      );
-    }
-  );
-  const teams = teamsInput.split(",").map((team) => team.trim());
+  // Запрашиваем список команд с проверкой на дублирование
+  const teams = await getTeamsFromUser(dmChannel);
 
   // Запрашиваем число участников в команде
   const maxPlayersPerTeamInput = await getInputFromUser(
@@ -149,7 +173,7 @@ const execute = async (interaction) => {
 
   // Ищем канал для публикации события (например, канал с именем "test")
   const eventChannel = interaction.guild.channels.cache.get(
-    "1336112109041487872"
+    "1179469911249137757"
   );
 
   if (!eventChannel) {
