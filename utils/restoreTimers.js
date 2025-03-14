@@ -2,7 +2,17 @@ import schedule from "node-schedule";
 import { getCollection } from "../utils/mongodb.js";
 import { removePlayerFromTeam } from "../utils/removePlayer.js";
 import { deleteNotification } from "../utils/deleteNotification.js";
-import { updateEventEmbed } from "../utils/updateEventEmbed.js"; // Импорт функции обновления Embed
+import { updateEventEmbed } from "../utils/updateEventEmbed.js";
+
+// Локализованные сообщения для DM уведомлений (по умолчанию английский)
+const dmMessages = {
+  dmRemoval: {
+    ru: (teamName) =>
+      `Вы были исключены из команды **${teamName}** из-за отсутствия подтверждения готовности к участию в игре.`,
+    en: (teamName) =>
+      `You have been removed from team **${teamName}** due to not confirming your readiness to participate.`,
+  },
+};
 
 export const restoreTimers = async (client) => {
   try {
@@ -38,13 +48,11 @@ export const restoreTimers = async (client) => {
             // Обновляем Embed в канале события
             await updateEventEmbed(client, event);
 
-            // Отправляем уведомление пользователю в DM
+            // Отправляем уведомление пользователю в DM (по умолчанию английский)
             try {
               const user = await client.users.fetch(userId);
               if (user) {
-                await user.send(
-                  `Вы были исключены из команды **${teamName}** из-за отсутствия подтверждения готовности к участию в игре.`
-                );
+                await user.send(dmMessages.dmRemoval.en(teamName));
               }
             } catch (dmError) {
               console.error(

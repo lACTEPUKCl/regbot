@@ -20,6 +20,9 @@ export const updateEventEmbed = async (client, event) => {
       return;
     }
 
+    // Определяем язык для Embed (если event.language не задан, по умолчанию "ru")
+    const language = event.language || "ru";
+
     const maxPlayersPerTeam = event.maxPlayersPerTeam || "∞";
 
     // Обновляем поля Embed для каждой команды
@@ -39,21 +42,25 @@ export const updateEventEmbed = async (client, event) => {
                 // Формат для clan-ивента
                 return `[${member.clanTag}] ${member.nickname} (${member.steamId}) [${member.numberPlayers}]`;
               } else if (member.squadLeader || member.techSquad) {
-                // Формат для solo-ивента
+                // Формат для solo-ивента:
+                // Если значение squadLeader или techSquad равно "Да" или "Yes" – добавляем эмодзи и больше ничего.
                 let prefix = "";
-                // Проверяем techSquad первым — если да, то используется только его иконка
                 if (
                   member.techSquad &&
-                  member.techSquad.toLowerCase() === "да"
+                  (member.techSquad.toLowerCase() === "да" ||
+                    member.techSquad.toLowerCase() === "yes")
                 ) {
                   prefix = "⚙️ ";
                 } else if (
                   member.squadLeader &&
-                  member.squadLeader.toLowerCase() === "да"
+                  (member.squadLeader.toLowerCase() === "да" ||
+                    member.squadLeader.toLowerCase() === "yes")
                 ) {
                   prefix = "⭐ ";
                 }
-                return `${prefix}${member.nickname} (${member.steamId}) - ${member.squadHours} ч.`;
+                return `${prefix}${member.nickname} (${member.steamId}) - ${
+                  member.squadHours
+                } ${language.toLowerCase() === "ru" ? "ч." : "h."}`;
               } else {
                 return `${member.nickname} (${member.steamId})`;
               }
