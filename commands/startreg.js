@@ -173,7 +173,7 @@ const execute = async (interaction) => {
 
   // Ищем канал для публикации события (например, канал с именем "test")
   const eventChannel = interaction.guild.channels.cache.get(
-    "1179469911249137757"
+    "1336112109041487872"
   );
 
   if (!eventChannel) {
